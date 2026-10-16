@@ -4,6 +4,7 @@
 
 #include "ballbreaker_game.h"
 #include "game.h"
+#include "music_remix.h"
 
 void GameView::apply(Spectrum& s, const std::set<int>& keys, uint8_t joy) {
     for (int k : held_)
@@ -20,6 +21,8 @@ void GameView::input(Spectrum& s, const Controls& c) {
     if (c.pad_x) keys.insert(0x0D);
     apply(s, keys, uint8_t(c.arrows | (c.trigger ? ZXC_JOY_FIRE : 0)));
 }
+
+std::unique_ptr<MusicRemix> GameView::make_remix(int) const { return nullptr; }
 
 std::string GameView::help() const {
     return "Keyboard = the Spectrum's (Shift = CAPS SHIFT, Alt = SYMBOL SHIFT)\n"

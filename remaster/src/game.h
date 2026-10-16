@@ -73,7 +73,7 @@ public:
     virtual void jump_to(Spectrum&, int /*level*/) {}
     // The remake's sound: the game's tune re-arranged (with the remake's picture; R: the original's),
     // and the sound effects it asked for since the last call (played with the remastered sound).
-    virtual std::unique_ptr<MusicRemix> make_remix(int /*sample_rate*/) const { return nullptr; }
+    virtual std::unique_ptr<MusicRemix> make_remix(int sample_rate) const;  // none by default (games.cpp)
     virtual void take_sfx(std::vector<SfxEvent>&) {}
     // The remake (R: or the original 1987 game): its picture, its sound, and the module's own
     // touches (e.g. the tune from the top on a new game, the next level once one is cleared).
