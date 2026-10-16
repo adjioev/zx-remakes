@@ -1,0 +1,9 @@
+# the original games are not ours to publish
+original/
+.env
+build/
+.DS_Store
+remaster/.env
+remaster/build*/
+remaster/assets/*/raw/
+remaster/assets/*/guides/
