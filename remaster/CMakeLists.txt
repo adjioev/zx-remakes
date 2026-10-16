@@ -20,6 +20,8 @@ add_executable(zxremakes
   src/spectrum.cpp
   src/zxcore.c
   src/audio.cpp
+  src/music_remix.cpp
+  src/sfx.cpp
   src/gamepad.cpp
   src/gamefile.cpp)
 target_link_libraries(zxremakes PRIVATE PkgConfig::RAYLIB)

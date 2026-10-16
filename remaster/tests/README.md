@@ -40,3 +40,33 @@ were excluded. The production build also completed the 30-second windowed
 scenario with brick destruction and life loss. This measures simulation timing,
 not the display's achieved FPS; interactive rendering requests VSync and is
 independent of the 50 Hz simulation.
+
+# Long-running remix pitch
+
+Restart isolation check (menu music must not leak into the new game):
+
+```sh
+c++ -std=c++20 -O2 -Isrc tests/music_restart.cpp src/music_remix.cpp -o /tmp/music_restart
+/tmp/music_restart
+```
+
+Compares a previously playing, restarted renderer with a fresh restarted renderer,
+both into silence and into new notes. Allows the 20 ms output transition, then
+requires matching audio for three seconds. The incomplete reset failed both cases.
+
+```sh
+c++ -std=c++20 -O2 -Isrc tests/music_pitch.cpp src/music_remix.cpp -o /tmp/music_pitch
+/tmp/music_pitch
+```
+
+This exercises `MusicRemix::frame` with synthetic AY registers and analyzes the
+actual output waveform, without a window or sound device. It renders three
+minutes each of a sustained lead and an A-minor accompaniment. Spectral checks
+at 2, 20, 80 and 180 seconds allow the intended chorus/vibrato/detuning, but
+reject the large pitch changes caused by unbounded float phase accumulation.
+Every output sample must also be finite.
+
+The old renderer failed these checks after 20 seconds. Oscillator phases now
+wrap each cycle, and modulation time comes from an integer sample counter with
+double-precision time calculations. Note envelopes still use short local times;
+there is no change to the arrangement or gameplay clock.

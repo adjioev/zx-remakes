@@ -7,3 +7,4 @@ remaster/.env
 remaster/build*/
 remaster/assets/*/raw/
 remaster/assets/*/guides/
+remaster/.cache/

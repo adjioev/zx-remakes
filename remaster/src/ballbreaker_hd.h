@@ -1,7 +1,9 @@
 #pragma once
 
 // Ball Breaker in HD, Tron style: the room, bricks and ball drawn in code as violet neon on black
-// glass, from the game's own 3D coordinates; anything else from the game's sprites, tinted. 16:9:
+// glass, from the game's own 3D coordinates; anything else from the game's sprites, tinted.
+// Effects (the ball rolling, trails, bounces, landings, shards, lights) are presentation only:
+// they read the game, never change it. 16:9:
 // the 256 x 128 playfield fills 1920 x 960, a new status bar takes the 120 px below.
 //
 // Game coordinates (notes/ballbreaker.md): X runs from the front to the back wall (screen +1, -1/2
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <random>
+#include <string>
 #include <vector>
 
 #include <raylib.h>
@@ -22,11 +25,34 @@ struct BBObject {
     int slot;          // 0 ball, 1 bat, 2 missile, 3+ bricks
 };
 
+// What the menus show (the original runs them; the remake draws them).
+struct BBMenu {
+    enum class Screen { None, Loading, Main, Controls, Keys, HiScores, Instructions, LevelCard };
+    Screen screen = Screen::None;
+    int cursor = 0;  // main menu item 0-5
+    double since = 0;  // seconds this screen has been up
+    float leave = 1;   // PLAY GAME taken: the main menu going (0 -> 1), as the original wipes it, then the card
+    struct Score {
+        std::string name;
+        int score;
+    };
+    std::vector<Score> scores;  // the hi-score table, best first
+    int entry_row = -1;         // the row a name is being typed into
+    struct Item {               // the instructions: a brick (sprite), what it does, its points
+        int sprite;
+        std::string text;
+        int points;
+    };
+    std::vector<Item> items;
+};
+
 struct BBState {
     int level = 0;  // 0-based
     int room = 0;   // 0-6: A-G
     int score = 0, missiles = 0, lives = 0;
+    bool unlimited_lives = false, unlimited_missiles = false;  // the remake's options
     std::vector<BBObject> objects;
+    BBMenu menu;
 };
 
 class BBRenderer {
@@ -34,7 +60,9 @@ public:
     static constexpr int W = 1920, H = 1080, FIELD_H = 960;
     static constexpr float SCALE = 7.5f;  // playfield pixel -> canvas
 
-    BBRenderer();
+    // fonts_dir: Orbitron.ttf; intro: the title picture (optional)
+    // intro: the loading screen's art; creatures: the aliens' painted frames (tools/bb_creatures.py)
+    BBRenderer(const std::string& fonts_dir, const std::string& intro, const std::string& creatures);
     ~BBRenderer();
     BBRenderer(const BBRenderer&) = delete;
     BBRenderer& operator=(const BBRenderer&) = delete;
@@ -54,30 +82,109 @@ private:
     void scene(const BBState&, double t, bool glow_pass);
     void room(int room, double t, bool glow_pass);
     void brick(const BBObject&, double t, bool glow_pass);
+    void bat(const BBObject&, double t, bool glow_pass);
+    void bat_lane(const BBObject&, double t, bool glow_pass);  // the floor in front of the bat, lit
     void ball(const BBObject&, double t, bool glow_pass);
-    void sprite(const BBObject&, Color tint);
+    void sprite(const BBObject&, Color tint, double t, bool glow_pass);  // the game's sprite as neon vectors
+    void missile(const BBObject&, double t, bool glow_pass);
     void status_bar(const BBState&);
-    void effects(bool glow_pass);
+    void effects(double t, bool glow_pass);
+    // the menus (end of ballbreaker_hd.cpp)
+    void menu_scene(const BBState&, double t, bool glow_pass);
+    void level_card(const BBState&, double t, bool glow_pass);
+    void text(const char* s, Vector2 centre, float size, Color c, bool big = false) const;
+    void text_left(const char* s, Vector2 at, float size, Color c, bool big = false) const;
+    void thumbnail(int sprite, Vector2 centre, float scale, double t, bool glow_pass);
+    Font font_big_{}, font_ui_{};
+    Texture2D intro_{};
+    Texture2D creatures_{};  // 0x11-0x15, a cell each: the sprite's box plus CREATURE_PAD all round
+    void floor_marks(double t, bool glow_pass);
+    void update_ball(const BBObject*, const BBObject* bat, double t, float dt);
+    // light on a point (game coordinates) from the ball and the explosions, 0..
+    Color lit(Color base, float x, float y, float z) const;
 
-    struct Particle {
+    // Effects. All in canvas pixels / seconds of game time; presentation only.
+    struct Spark {  // a bright streak
         Vector2 p, v;
-        float life, max, size;
+        float life, max;
+        Color c;
+    };
+    struct Shard {  // an angular fragment of a broken brick, tumbling
+        Vector2 p, v;
+        float ang, spin, size, life, max;
+        Color c;
+    };
+    struct Flash {  // a short light pulse at a point
+        Vector2 p;
+        float radius, life, max;
+        Color c;
+    };
+    struct FloorRing {  // a ring spreading over the floor (game X / Z)
+        float x, z, radius, life, max;
+        Color c;
+    };
+    struct Light {  // lights nearby faces (game coordinates)
+        float x, y, z, radius, intensity, life, max;
         Color c;
     };
     struct Popup {
         Vector2 p;
         float life;
         int points;
-        Color c;
     };
-    std::vector<Particle> parts_;
+    struct TrailPoint {
+        Vector2 p;
+        double t;
+    };
+    std::vector<Spark> sparks_;
+    std::vector<Shard> shards_;
+    std::vector<Flash> flashes_;
+    std::vector<FloorRing> rings_;
+    std::vector<Light> lights_;
     std::vector<Popup> popups_;
-    std::deque<Vector2> trail_;
+
+    // The ball as drawn: rolling (its orientation turns with the distance it travels), its trail
+    // in the air and on the floor, landings and bounces.
+    struct BallFx {
+        bool have = false;
+        float x = 0, z = 0, h = 0;     // game coordinates, h = height above the floor
+        Vector2 floor{};               // the point on the floor right under it (canvas)
+        float rot[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        float wx = 0, wy = 0, wz = 0;  // spin (rad/s), kept in the air, fading
+        float vx = 0, vz = 0;          // ground velocity (units/s), smoothed
+        double land_t = -10, bounce_t = -10;
+        std::deque<TrailPoint> trail, floor_trail;
+    } ball_;
+    struct BatWave {
+        float along, life;  // where on the bat (0..1), seconds
+    };
+    std::vector<BatWave> bat_waves_;
+    // The bat's box, from its sprite (it changes with the "bat size" bricks): its length along
+    // the rail (X, what the ball can hit), its width (Z), its height; where its sprite's box starts.
+    struct BatShape {
+        float dx = 12, dz = 7, h = 12;
+        int left = 0;
+    };
+    BatShape bat_shape(int sprite) const;
+    std::vector<uint8_t> sprite_data_;
+    float bat_dx_ = 12;                       // the current bat's length, for where the ball hit
+    Vector2 bat_edge_a_{}, bat_edge_b_{};     // its striking edge: drawn crisp over the glow
+    bool bat_edge_ = false;
+
     double last_t_ = -1;
     std::mt19937 rng_{1987};
 
     RenderTexture2D glow_{}, half_a_{}, half_b_{};
     Shader blur_{};
     int blur_dir_loc_ = -1;
-    Texture2D sprites_{};
+    Texture2D sprites_{};          // the sprites' solid parts as dark glass (ink darker), for the fill
+    // The sprites as vectors (sprite pixels): the silhouette's outlines, smoothed (closed), and
+    // the ink strokes inside (open), drawn as crisp neon lines at any size.
+    struct SpriteVec {
+        std::vector<std::vector<Vector2>> outlines, strokes;
+    };
+    std::vector<SpriteVec> vec_;
+    void sprite_at(int sprite, Rectangle dst, Color tint, double t, bool glow_pass);
+    // the aliens drawn by hand as vectors (sprite pixels in dst): false if not one of them
+    bool creature(int sprite, Rectangle dst, Color tint, double t, bool glow_pass);
 };

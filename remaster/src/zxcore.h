@@ -42,6 +42,11 @@ void zxc_set_turbo(zxc_t* zx, float factor);
 // From an execution hook: hold the CPU until the next frame. Video and audio keep
 // running; a video interrupt is retained for the CPU to service when it resumes.
 void zxc_yield_frame(zxc_t* zx);
+// The next time the CPU fetches the opcode at at_pc, carry on at to_pc with SP = sp instead (a
+// jump the program did not make: e.g. into the game's own level start).
+void zxc_jump_at(zxc_t* zx, uint16_t at_pc, uint16_t to_pc, uint16_t sp);
+// The AY's 16 registers as they are now (128K; zeros on a 48K).
+void zxc_ay_regs(const zxc_t* zx, uint8_t out[16]);
 // CPU T-states run so far (turbo included).
 uint64_t zxc_cpu_ticks(const zxc_t* zx);
 

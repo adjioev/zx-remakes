@@ -33,6 +33,9 @@ public:
     void set_turbo(float factor) { zxc_set_turbo(zx_, factor); }
     void yield_frame() { zxc_yield_frame(zx_); }
     uint64_t cpu_ticks() const { return zxc_cpu_ticks(zx_); }
+    void ay_regs(uint8_t out[16]) const { zxc_ay_regs(zx_, out); }
+    // When the CPU next gets to at_pc, continue at to_pc with SP = sp (see zxc_jump_at).
+    void jump_at(uint16_t at_pc, uint16_t to_pc, uint16_t sp) { zxc_jump_at(zx_, at_pc, to_pc, sp); }
 
     // Script / PC key names: "space", "enter", "caps", "sym", "a".."z", "0".."9".
     static std::optional<int> key_code(const std::string& name);
@@ -41,6 +44,7 @@ public:
 
     uint8_t peek(uint16_t addr) const { return zxc_peek(zx_, addr); }
     void poke(uint16_t addr, uint8_t value) { zxc_poke(zx_, addr, value); }
+    void poke16(uint16_t addr, uint16_t value) { poke(addr, uint8_t(value)), poke(uint16_t(addr + 1), uint8_t(value >> 8)); }
     uint16_t peek16(uint16_t addr) const { return uint16_t(peek(addr) | peek(uint16_t(addr + 1)) << 8); }
     const uint8_t* bank(int n) const { return zxc_bank(zx_, n); }
     // 6912 bytes: bitmap (interleaved rows) then attributes, of the bank on display.

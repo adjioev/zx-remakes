@@ -41,12 +41,14 @@ void OriginalView::draw_original(const Spectrum& s, Rectangle dest) {
     DrawTexturePro(tex_, {0, 0, float(Spectrum::FB_W), float(Spectrum::FB_H)}, dest, {0, 0}, 0, WHITE);
 }
 
-void OriginalView::draw_original_fit(const Spectrum& s) {
+Rectangle GameView::original_rect() const {
     Vector2 c = canvas_size();
     float scale = std::min(c.x / Spectrum::FB_W, c.y / Spectrum::FB_H);
     float w = Spectrum::FB_W * scale, h = Spectrum::FB_H * scale;
-    draw_original(s, {(c.x - w) / 2, (c.y - h) / 2, w, h});
+    return {(c.x - w) / 2, (c.y - h) / 2, w, h};
 }
+
+void OriginalView::draw_original_fit(const Spectrum& s) { draw_original(s, original_rect()); }
 
 void OriginalView::draw(const Spectrum& s, bool, double) { draw_original_fit(s); }
 

@@ -26,6 +26,8 @@ struct zxc {
     zxc_exec_fn exec_fn;
     void* exec_user;
     float turbo, turbo_acc;
+    bool jump;
+    uint16_t jump_at, jump_to, jump_sp;
     uint64_t cpu_ticks;
     float ring[AUDIO_RING];
     unsigned ring_w, ring_r;  // only touched by the thread that runs the emulator
@@ -178,6 +180,21 @@ static uint64_t idle_tick(zx_t* sys, uint64_t pins) {
 
 void zxc_yield_frame(zxc_t* zx) { zx->yielded = true; }
 
+static uint64_t maybe_jump(zxc_t* zx, uint64_t pins) {
+    if (zx->jump && (pins & (Z80_M1 | Z80_MREQ | Z80_RD)) == (Z80_M1 | Z80_MREQ | Z80_RD) &&
+        Z80_GET_ADDR(pins) == zx->jump_at) {
+        zx->jump = false;
+        pins = z80_prefetch(&zx->sys.cpu, zx->jump_to);  // drops this fetch, starts one at jump_to
+        zx->sys.cpu.sp = zx->jump_sp;
+    }
+    return pins;
+}
+
+void zxc_jump_at(zxc_t* zx, uint16_t at_pc, uint16_t to_pc, uint16_t sp) {
+    zx->jump = true;
+    zx->jump_at = at_pc, zx->jump_to = to_pc, zx->jump_sp = sp;
+}
+
 void zxc_run_frame(zxc_t* zx) {
     // zx_exec, with the turbo T-states in between
     zx_t* sys = &zx->sys;
@@ -193,6 +210,7 @@ void zxc_run_frame(zxc_t* zx) {
         pins = _zx_tick(sys, pins);
         zx->cpu_ticks++;
         if (hooked) on_tick(zx, pins);
+        if (zx->jump) pins = maybe_jump(zx, pins);
         if (zx->turbo > 1 && !zx->yielded) {
             zx->turbo_acc += zx->turbo - 1;
             while (zx->turbo_acc >= 1 && !zx->yielded) {
@@ -200,6 +218,7 @@ void zxc_run_frame(zxc_t* zx) {
                 pins = cpu_only_tick(sys, pins);
                 zx->cpu_ticks++;
                 if (hooked) on_tick(zx, pins);
+                if (zx->jump) pins = maybe_jump(zx, pins);
             }
         }
     }
@@ -213,6 +232,10 @@ void zxc_set_turbo(zxc_t* zx, float factor) {
 }
 
 uint64_t zxc_cpu_ticks(const zxc_t* zx) { return zx->cpu_ticks; }
+
+void zxc_ay_regs(const zxc_t* zx, uint8_t out[16]) {
+    for (int i = 0; i < 16; i++) out[i] = zx->sys.type == ZX_TYPE_128 ? zx->sys.ay.reg[i] : 0;
+}
 
 void zxc_key(zxc_t* zx, int code, bool down) {
     // straight to the matrix: zx_key_down would turn space and the cursor keys into the

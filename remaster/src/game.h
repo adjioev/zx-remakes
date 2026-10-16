@@ -11,11 +11,15 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include <raylib.h>
 
 #include "gamefile.h"
+#include "sfx.h"
 #include "spectrum.h"
+
+class MusicRemix;
 
 enum class GameExit { Quit, Back };  // Back: to the game list
 
@@ -55,6 +59,27 @@ public:
     virtual void draw(const Spectrum&, bool original, double t) = 0;
     // The controls, shown on the pause screen (lines).
     virtual std::string help() const;
+    // A remake key (a letter, while letters_free(), or on the pause screen) not taken by the
+    // runner: a game option. Returns what to show (a toast), empty if not one of the game's.
+    virtual std::string on_key(Spectrum&, int /*raylib key*/) { return ""; }
+    // The game reads no letters right now: the remake's letter keys (R) are free to use.
+    virtual bool letters_free() const { return false; }
+    // Where the original picture sits in the canvas (the R view), for the R transition.
+    virtual Rectangle original_rect() const;
+    // Levels the pause screen can jump to (0: none), the current one, and the jump itself.
+    virtual int levels() const { return 0; }
+    virtual int level(const Spectrum&) const { return 0; }
+    virtual bool can_jump() const { return false; }
+    virtual void jump_to(Spectrum&, int /*level*/) {}
+    // The remake's sound: the game's tune re-arranged (with the remake's picture; R: the original's),
+    // and the sound effects it asked for since the last call (played with the remastered sound).
+    virtual std::unique_ptr<MusicRemix> make_remix(int /*sample_rate*/) const { return nullptr; }
+    virtual void take_sfx(std::vector<SfxEvent>&) {}
+    // The remake (R: or the original 1987 game): its picture, its sound, and the module's own
+    // touches (e.g. the tune from the top on a new game, the next level once one is cleared).
+    virtual void set_remake(bool) {}
+    // The game started its tune from the top since the last call (the remix starts over with it).
+    virtual bool music_restarted() { return false; }
 
 protected:
     // Hold exactly these Spectrum keys and this joystick (ZXC_JOY_* bits) from now on.

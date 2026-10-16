@@ -32,8 +32,15 @@ const LoadedGame* find(const std::vector<LoadedGame>& games, GameId id) {
     return nullptr;
 }
 
-// The loading screen the snapshot holds (it was taken on it), as a texture.
-Texture2D cover_of(const LoadedGame& g) {
+// The game's HD title picture if it has one (assets/<key>/intro.png), else the loading screen the
+// snapshot holds (it was taken on it).
+Texture2D cover_of(const LoadedGame& g, const std::string& assets) {
+    std::string hd = assets + "/" + game_info(g.variant->game).key + "/intro.png";
+    if (FileExists(hd.c_str())) {
+        Texture2D t = LoadTexture(hd.c_str());
+        SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+        return t;
+    }
     auto spec = Spectrum::from_z80(g.data);
     if (!spec) return {};
     std::vector<uint32_t> px(Spectrum::SCREEN_W * Spectrum::SCREEN_H);
@@ -47,7 +54,7 @@ Texture2D cover_of(const LoadedGame& g) {
 // The game list: one card per known game; the ones without a file are greyed out and ask for
 // it to be dropped. Returns the chosen game, or nothing when the window closes.
 // test_dir set: captures this screen once and returns.
-std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::string& data_dir,
+std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::string& data_dir, const std::string& assets,
                                 const std::string& test_dir) {
     std::string error;
     int sel = 0;
@@ -61,7 +68,7 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
         auto it = covers.find(id);
         if (it != covers.end()) return it->second;
         const LoadedGame* g = find(games, id);
-        return covers[id] = g ? cover_of(*g) : Texture2D{};
+        return covers[id] = g ? cover_of(*g, assets) : Texture2D{};
     };
     std::optional<GameId> chosen;
     for (int frame = 0; !WindowShouldClose() && !chosen; frame++) {
@@ -118,7 +125,12 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             DrawRectangleRounded(card, 0.05f, 8, {36, 36, 46, 255});
             Rectangle art{card.x + 12, card.y + 12, card.width - 24, art_h - 24};
             Texture2D t = have ? cover(g.id) : Texture2D{};
-            if (t.id) DrawTexturePro(t, {0, 0, float(t.width), float(t.height)}, art, {0, 0}, 0, WHITE);
+            if (t.id) {  // the middle of it, at the card's shape
+                float src_w = std::min(float(t.width), t.height * art.width / art.height);
+                float src_h = src_w * art.height / art.width;
+                Rectangle src{(t.width - src_w) / 2, (t.height - src_h) / 2, src_w, src_h};
+                DrawTexturePro(t, src, art, {0, 0}, 0, WHITE);
+            }
             else DrawRectangleRec(art, {28, 28, 34, 255});
             centred(g.title, card.x + cw / 2, card.y + ch - 66, 34, have ? RAYWHITE : Fade(RAYWHITE, 0.45f));
             if (!have) {
@@ -185,12 +197,18 @@ int main(int argc, char** argv) {
         } else if (!games.empty())
             g = &games.front();
         if (g) run_game(*g, assets, test_dir, script);
-        else pick_game(games, data_dir, test_dir);
+        else pick_game(games, data_dir, assets, test_dir);
+        CloseWindow();
+        return 0;
+    }
+    if (const char* key = std::getenv("ZXREMAKES_GAME")) {  // debug: straight into a game (e.g. ballbreaker)
+        const GameInfo* info = game_by_key(key);
+        if (const LoadedGame* g = info ? find(games, info->id) : nullptr) run_game(*g, assets, "", "");
         CloseWindow();
         return 0;
     }
     while (!WindowShouldClose()) {
-        auto id = pick_game(games, data_dir, "");
+        auto id = pick_game(games, data_dir, assets, "");
         if (!id) break;
         if (run_game(*find(games, *id), assets, "", "") == GameExit::Quit) break;
     }
