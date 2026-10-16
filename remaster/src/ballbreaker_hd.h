@@ -24,8 +24,12 @@ struct BBObject {
     int sprite;        // sprite number
     float x, y, z;     // game 3D coordinates
     int slot;          // 0 ball, 1 bat, 2 missile, 3+ bricks
+    float lift = -1;   // a double slab's upper plate, pixels above the lower one (smoothed; -1: from the sprite)
     float bat_width = 0;  // slot 1: collision width from 0x8063, not the sprite mask
 };
+
+// The double slab bricks bob their upper plate 0-5 pixels (one sprite per height); -1 for other sprites.
+float slab_lift(int sprite);
 
 // What the menus show (the original runs them; the remake draws them).
 struct BBMenu {

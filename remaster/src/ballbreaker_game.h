@@ -74,11 +74,20 @@ private:
     BBPaddleHit paddle_hit_;
     uint64_t paddle_hit_id_ = 0, sounded_paddle_hit_ = 0;
     std::map<int, Track> tracks_;
+    // double slabs: the upper plate glides from height to height over the time the last step took
+    struct Lift {
+        float from, to;
+        double t, dur;
+        float at(double now) const { return from + (to - from) * float(std::clamp((now - t) / dur, 0.0, 1.0)); }
+    };
+    std::map<int, Lift> lifts_;
     std::vector<std::pair<BBObject, int>> bursts_;
     uint64_t passes_ = 0;
     double perf_t0_ = 0;
     bool paced_ = false;
     int pending_level_ = -1;
+    bool bat_eaten_ = false;  // unlimited lives: the bat eaten up, the game told it was a lost ball
+    uint16_t eater_ = 0;      // the object of the creature that landed on the bat
     bool unlimited_lives_ = false, unlimited_missiles_ = false;  // options (L, K); off = the original  // a jump asked for: done as the CPU gets to the next play pass
     int gain_ = 0;           // score gained lately, for the next burst's "+points"
     double gain_t_ = -1;  // bricks gone, points, for the renderer

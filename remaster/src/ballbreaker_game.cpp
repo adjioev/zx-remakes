@@ -15,8 +15,13 @@ namespace {
 constexpr uint16_t MENU_LOOP = 0x9DA7;    // main menu and the control choice
 constexpr uint16_t PLAY_LOOP = 0x854C;    // sprite compositor, every frame of play
 constexpr uint16_t ENTRY_LOOP = 0xABC0;   // typing a name into the hi-score table (its key loop)
+constexpr uint16_t CREATURE_CAUGHT = 0x8F97;  // just after the bat, eaten up by a creature, set PLAY_REASON = 4
+constexpr uint16_t PLAY_RESULT = 0x8BE8;      // play over, the bat's sprite restored: acts on PLAY_REASON
 constexpr uint16_t PADDLE_HIT = 0x8A73;  // collision accepted; outgoing Z direction has been stored
 constexpr uint16_t BAT_CENTRE = 0x8061, BAT_Z = 0x8062, BAT_WIDTH = 0x8063, BALL_X = 0x8064;
+constexpr uint16_t CREATURE_LANDS = 0x96DC;   // a creature lands on the bat (IX = its object)
+constexpr uint16_t ANIMATIONS_END = 0x804E;   // word: the end of the animation list (explosions...)
+constexpr uint16_t BAT_EATEN = 0x808C;        // a creature is eating the bat (its sprite saved at 0x5B95)
 constexpr uint16_t PAGE_LOOP = 0x86A5;    // a page up: hi-scores, instructions (and the name entry)
 constexpr uint64_t LEAVE_FRAMES = 45;     // the menu's wipe after PLAY GAME (the original's, ~0.9 s)
 constexpr uint64_t RECENT = 10;           // frames a sighting counts for
@@ -83,6 +88,26 @@ void BallBreakerView::start(Spectrum& s, const std::string& assets) {
         float left = float(sp->peek(BAT_CENTRE) - sp->peek(BAT_WIDTH) / 2);
         paddle_hit_ = {++paddle_hit_id_, double(frame_ + 1) / Spectrum::FRAME_HZ,
                        std::clamp((sp->peek(BALL_X) - left) / width, 0.0f, 1.0f)};
+    });
+    // a creature that lands on the bat eats it a few pixels a pass (0xAC50); the bat gone, the
+    // original ends the whole game, whatever the lives (0x8F8A). With unlimited lives it costs a
+    // life as a lost ball does (code 2: the bricks stay, the ball is served again) and, once the
+    // game has restored the bat, the eating stops (the game itself clears it only at a level start)
+    // and the creature is blown up (the game never removes it: it would stay on the bat's line)
+    s.on_exec(CREATURE_LANDS, [this](const zxc_regs_t& r) { eater_ = r.ix; });
+    s.on_exec(CREATURE_CAUGHT, [this, sp](const zxc_regs_t&) {
+        if (unlimited_lives_ && sp->peek(PLAY_REASON) == 4) sp->poke(PLAY_REASON, 2), bat_eaten_ = true;
+    });
+    s.on_exec(PLAY_RESULT, [this, sp](const zxc_regs_t&) {
+        if (!bat_eaten_) return;
+        sp->poke(BAT_EATEN, 0), bat_eaten_ = false;
+        if (eater_) {  // blown up as a missile does it (0x9B4A): an entry in the game's animation list
+            uint16_t at = uint16_t(sp->peek16(ANIMATIONS_END) - 1);
+            const uint8_t entry[6] = {4, 5, uint8_t(eater_), uint8_t(eater_ >> 8), 0x18, 0};
+            for (int i = 0; i < 6; i++) sp->poke(uint16_t(at + i), entry[i]);
+            sp->poke(ANIMATIONS_END, uint8_t(at + 6)), sp->poke(ANIMATIONS_END + 1, uint8_t((at + 6) >> 8));
+            eater_ = 0;
+        }
     });
     s.on_exec(MAIN_LOOP, [this, sp](const zxc_regs_t&) {
         if (pending_level_ >= 0) {  // the jump (jump_to): the level number, then the level start
@@ -423,8 +448,18 @@ void BallBreakerView::smooth_sample(const Spectrum& s) {
             for (const BBObject& o : hit) bursts_.push_back({o, points});
     }
     sounds(before, bursts_before);
-    if (before.level != latest_.level) tracks_.clear();
+    if (before.level != latest_.level) tracks_.clear(), lifts_.clear();
     double t = game_t_;
+    std::map<int, Lift> lifts;
+    for (const BBObject& o : latest_.objects) {
+        float h = slab_lift(o.sprite);
+        if (h < 0) continue;
+        auto it = lifts_.find(o.slot);
+        Lift l = it != lifts_.end() ? it->second : Lift{h, h, t, 0.1};
+        if (h != l.to) l = {l.at(t), h, t, std::clamp(t - l.t, 0.02, 0.15)};
+        lifts[o.slot] = l;
+    }
+    lifts_ = std::move(lifts);
     std::map<int, Track> next;
     for (const BBObject& o : latest_.objects) {
         float v[5] = {o.sx, o.sy, o.x, o.y, o.z};
@@ -463,6 +498,8 @@ void BallBreakerView::smooth_apply(BBState& st, double t) const {
         track_pos(it->second, t - BB_RENDER_DELAY, v);
         o.sx = v[0], o.sy = v[1], o.x = v[2], o.y = v[3], o.z = v[4];
     }
+    for (BBObject& o : st.objects)
+        if (auto it = lifts_.find(o.slot); it != lifts_.end()) o.lift = it->second.at(t);
 }
 
 void BallBreakerView::sounds(const BBState& before, size_t bursts_before) {

@@ -257,6 +257,18 @@ void main() {
 
 }  // namespace
 
+float slab_lift(int sprite) {
+    switch (sprite) {
+    case 0x2f: return 0;
+    case 0x2e: return 1;
+    case 0x2d: return 2;
+    case 0x2c: return 3;
+    case 0x0e: return 4;
+    case 0x30: return 5;
+    default: return -1;
+    }
+}
+
 BBRenderer::BBRenderer(const std::string& fonts_dir, const std::string& intro, const std::string& creatures) {
     if (FileExists(intro.c_str())) {
         intro_ = LoadTexture(intro.c_str());
@@ -616,11 +628,9 @@ Color BBRenderer::lit(Color base, float x, float y, float z) const {
     return out;
 }
 
-void BBRenderer::brick(const BBObject& o, double t, bool glow) {
+void BBRenderer::brick(const BBObject& o, double, bool glow) {
     Kind k = kind_of(o.sprite);
     Color c = classic() && k.shape == Shape::Wire ? Color{238, 236, 208, 255} : k.colour;
-    if (k.shape == Shape::Slabs)  // these shimmer in the original: pulse
-        c = scale(c, 0.75f + 0.25f * float(std::sin(t * 8 + o.x * 0.3)));
     float x0 = float(o.x), y0 = float(o.y), z1 = float(o.z), z0 = z1 - CUBE, x1 = x0 + CUBE, y1 = y0 + CUBE;
     float xm = (x0 + x1) / 2, ym = (y0 + y1) / 2, zm = (z0 + z1) / 2;
     float w = glow ? 4 : 2.5f;
@@ -677,10 +687,12 @@ void BBRenderer::brick(const BBObject& o, double t, bool glow) {
         box(x0, x1, y0, ym, z0, z1, c);
         box(xm, x1, ym, y1, z0, z1, c);
         break;
-    case Shape::Slabs:
+    case Shape::Slabs: {  // the upper plate bobs, as in the original
+        float lift = o.lift >= 0 ? o.lift : std::max(slab_lift(o.sprite), 0.0f);
         box(x0, x1, y0, y0 + 4, z0, z1, c);
-        box(x0, x1, y0 + 7, y0 + 11, z0, z1, c);
+        box(x0, x1, y0 + 4 + lift, y0 + 8 + lift, z0, z1, c);
         break;
+    }
     case Shape::Wire: {
         box(x0, x1, y0, y1, z0, z1, c, classic());
         if (classic() && !glow) {
