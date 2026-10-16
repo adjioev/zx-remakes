@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZX Remakes</title>
+<meta name="description" content="Fan-made HD remakes of ZX Spectrum games. The original runs unmodified in an emulator and the remake paints new art over it. Free, open source; bring your own copy of the original games.">
+<meta property="og:title" content="ZX Remakes">
+<meta property="og:description" content="ZX Spectrum classics, repainted in HD. A free fan project.">
+<meta property="og:image" content="img/bb-hd-2.webp">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2312121a'/%3E%3Cpath d='M4 16 10 0h2L6 16z' fill='%23e8323c'/%3E%3Cpath d='M6 16 12 0h2L8 16z' fill='%23f5c518'/%3E%3Cpath d='M8 16 14 0h2l-6 16z' fill='%2337c24a'/%3E%3Cpath d='M10 16 16 0v5l-4 11z' fill='%2328b8e0'/%3E%3C/svg%3E">
+<style>
+@font-face { font-family: Orbitron; src: url(fonts/Orbitron.ttf); font-display: swap; }
+:root {
+  --bg: #0d0d14; --panel: #16162a; --line: #2a2a44; --ink: #e6e6f2; --dim: #9696b4;
+  --violet: #a46bff; --cyan: #28b8e0; --red: #e8323c; --yellow: #f5c518; --green: #37c24a;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--cyan); }
+img { max-width: 100%; display: block; }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+h1, h2, h3, .brand, .btn { font-family: Orbitron, system-ui, sans-serif; font-weight: 700; letter-spacing: .03em; }
+[lang="ru"] .en, [lang="en"] .ru { display: none; }
+
+/* the Spectrum's rainbow */
+.stripes { display: inline-flex; transform: skewX(-25deg); margin-left: 10px; }
+.stripes i { width: 7px; height: 22px; }
+.stripes i:nth-child(1) { background: var(--red); } .stripes i:nth-child(2) { background: var(--yellow); }
+.stripes i:nth-child(3) { background: var(--green); } .stripes i:nth-child(4) { background: var(--cyan); }
+
+header.top { position: sticky; top: 0; z-index: 5; background: rgba(13,13,20,.88); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+header.top .wrap { display: flex; align-items: center; gap: 20px; height: 60px; }
+.brand { display: flex; align-items: center; font-size: 19px; color: var(--ink); text-decoration: none; white-space: nowrap; }
+.brand b { color: var(--violet); margin-left: 8px; }
+nav { display: flex; gap: 18px; margin-left: auto; }
+nav a { color: var(--dim); text-decoration: none; font-size: 15px; }
+nav a:hover { color: var(--ink); }
+.langs { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.langs button { background: none; border: 0; color: var(--dim); padding: 4px 10px; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+.langs button[aria-pressed="true"] { background: var(--violet); color: #fff; }
+@media (max-width: 760px) { nav { display: none; } .langs { margin-left: auto; } }
+
+.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--line); }
+.hero .shots { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+.hero .shots img { width: 100%; aspect-ratio: 4/3; object-fit: cover; opacity: .5; }
+.hero .text { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 16px;
+  background: radial-gradient(ellipse at center, rgba(13,13,20,.5), rgba(13,13,20,.92)); }
+.hero h1 { display: flex; align-items: center; font-size: clamp(34px, 7vw, 84px); line-height: 1; margin: 0; text-shadow: 0 4px 0 #000; }
+.hero h1 b { color: var(--violet); margin-left: .3em; }
+.hero h1 .stripes i { width: clamp(10px, 1.6vw, 20px); height: clamp(36px, 6vw, 72px); }
+.hero p { max-width: 660px; font-size: clamp(16px, 2.2vw, 20px); margin: 18px 0 26px; }
+@media (max-width: 720px) { .hero .shots { grid-template-columns: 1fr; } .hero .shots img:not(:first-child) { display: none; } .hero .shots img { aspect-ratio: 3/4; } }
+
+.btn { display: inline-flex; align-items: center; gap: 10px; background: var(--violet); color: #fff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-size: 18px; box-shadow: 0 4px 0 #5a2fa0; }
+.btn.alt { background: var(--panel); border: 1px solid var(--line); box-shadow: 0 4px 0 #06060a; }
+.btn small { font: 500 13px system-ui, sans-serif; opacity: .85; }
+.btns { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+
+section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+section h2 { font-size: clamp(26px, 4.4vw, 40px); margin: 0 0 8px; }
+section .lead { color: var(--dim); margin: 0 0 32px; max-width: 780px; }
+
+.game { display: grid; grid-template-columns: 1.4fr 1fr; gap: 32px; align-items: start; margin-bottom: 56px; }
+.game h3 { font-size: 30px; margin: 0; }
+.game .year { color: var(--yellow); font: 600 14px system-ui, sans-serif; text-transform: uppercase; letter-spacing: .1em; }
+.game ul { padding-left: 20px; color: var(--dim); }
+.game ul li { margin: 4px 0; }
+@media (max-width: 860px) { .game { grid-template-columns: 1fr; } }
+
+.themes { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.themes button { background: var(--panel); border: 1px solid var(--line); color: var(--dim); border-radius: 6px; padding: 5px 12px; font: 600 13px system-ui, sans-serif; cursor: pointer; }
+.themes button[aria-pressed="true"] { border-color: var(--violet); color: var(--ink); }
+.themes span { color: var(--dim); font-size: 14px; align-self: center; margin-left: 4px; }
+.compare { position: relative; aspect-ratio: 16/9; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); background: #000; user-select: none; touch-action: pan-y; cursor: ew-resize; }
+.compare img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.compare .over { clip-path: inset(0 0 0 var(--cut, 50%)); }
+.compare .bar { position: absolute; top: 0; bottom: 0; left: var(--cut, 50%); width: 3px; margin-left: -1px; background: #fff; box-shadow: 0 0 12px var(--violet); }
+.compare .bar::after { content: "\2194"; position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); width: 38px; height: 38px; border-radius: 50%; background: #fff; color: #000; display: grid; place-items: center; font-size: 20px; }
+.compare .tag { position: absolute; top: 10px; padding: 2px 8px; border-radius: 4px; background: rgba(0,0,0,.7); font: 600 12px system-ui, sans-serif; letter-spacing: .08em; }
+.compare .tag.l { left: 10px; } .compare .tag.r { right: 10px; color: var(--violet); }
+.thumbs { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.thumbs button { padding: 0; border: 2px solid transparent; border-radius: 6px; overflow: hidden; width: 92px; cursor: pointer; background: none; opacity: .6; }
+.thumbs button[aria-pressed="true"] { border-color: var(--violet); opacity: 1; }
+
+.next { border: 1px dashed var(--line); border-radius: 10px; padding: 22px; color: var(--dim); }
+.next strong { color: var(--ink); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px; }
+.card h3 { font-size: 20px; margin: 0 0 8px; }
+.card p, .card li { color: var(--dim); margin: 6px 0; }
+.card code { color: var(--ink); background: #09090f; padding: 1px 6px; border-radius: 4px; font-size: 14px; word-break: break-word; }
+.step { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--violet); color: #fff; font-family: Orbitron, sans-serif; font-size: 16px; margin-bottom: 10px; }
+
+table.keys { width: 100%; border-collapse: collapse; }
+table.keys td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.keys td:first-child { white-space: nowrap; width: 38%; }
+kbd { display: inline-block; min-width: 26px; text-align: center; padding: 1px 7px; border: 1px solid #3c3c60; border-bottom-width: 3px; border-radius: 5px; background: #09090f; font: 600 13px system-ui, sans-serif; color: var(--ink); }
+
+.beta { display: inline-block; vertical-align: middle; font: 700 12px system-ui, sans-serif; letter-spacing: .12em; color: #12121a; background: var(--yellow); padding: 3px 8px; border-radius: 4px; margin-left: 10px; }
+.hero .beta { font-size: clamp(12px, 1.6vw, 16px); padding: 4px 12px; margin: 14px 0 0; }
+.soon { display: inline-block; font: 700 12px system-ui, sans-serif; letter-spacing: .12em; color: #fff; background: var(--violet); padding: 3px 8px; border-radius: 4px; vertical-align: middle; }
+.note { border-left: 4px solid var(--yellow); background: var(--panel); padding: 16px 20px; border-radius: 0 10px 10px 0; color: var(--dim); }
+.note strong { color: var(--ink); }
+.about { max-width: 780px; }
+.about p { color: var(--dim); margin: 0 0 14px; }
+footer { padding: 40px 0 60px; color: var(--dim); font-size: 14px; }
+footer p { margin: 6px 0; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">ZX <b>REMAKES</b><span class="stripes"><i></i><i></i><i></i><i></i></span></a><span class="beta">BETA</span>
+    <nav>
+      <a href="#games"><span class="en">Games</span><span class="ru">Игры</span></a>
+      <a href="#download"><span class="en">Download</span><span class="ru">Скачать</span></a>
+      <a href="#play"><span class="en">How to play</span><span class="ru">Как играть</span></a>
+      <a href="#keys"><span class="en">Controls</span><span class="ru">Управление</span></a>
+      <a href="#about"><span class="en">About</span><span class="ru">О проекте</span></a>
+      <a href="https://github.com/adjioev/zx-remakes">GitHub</a>
+    </nav>
+    <div class="langs" role="group" aria-label="Language">
+      <button type="button" data-set-lang="en" aria-pressed="true">EN</button>
+      <button type="button" data-set-lang="ru" aria-pressed="false">RU</button>
+    </div>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="shots">
+    <img src="img/bb-hd-2.webp" alt="">
+    <img src="img/bb-cl-1.webp" alt="">
+    <img src="img/bb-hd-4.webp" alt="">
+  </div>
+  <div class="text">
+    <h1>ZX <b>REMAKES</b><span class="stripes"><i></i><i></i><i></i><i></i></span></h1>
+    <span class="beta"><span class="en">BETA · WORK IN PROGRESS</span><span class="ru">БЕТА · В РАЗРАБОТКЕ</span></span>
+    <p>
+      <span class="en">ZX Spectrum classics with new HD graphics, smooth movement and remastered sound, and the original gameplay underneath. The first game is <em>Ball Breaker</em>; more are on the way.</span>
+      <span class="ru">Классика ZX Spectrum в новой HD-графике, с плавным движением и обновлённым звуком, а под ними та же оригинальная игра. Первая игра — <em>Ball Breaker</em>, следующие уже в работе.</span>
+    </p>
+    <div class="btns">
+      <a class="btn" href="#download"><span class="en">Download</span><span class="ru">Скачать</span> <small>Windows · Linux</small></a>
+      <a class="btn alt" href="#games"><span class="en">See the games</span><span class="ru">Смотреть игры</span></a>
+    </div>
+  </div>
+</div>
+
+<section id="games">
+  <div class="wrap">
+    <h2><span class="en">The games</span><span class="ru">Игры</span></h2>
+    <p class="lead">
+      <span class="en">Drag the slider to compare the original with the remake. Each game can have more than one HD look; switch between them while you play.</span>
+      <span class="ru">Двигайте ползунок, чтобы сравнить оригинал с ремейком. У игры может быть несколько HD-оформлений, они переключаются прямо во время игры.</span>
+    </p>
+
+    <div class="game">
+      <div>
+        <div class="themes" data-for="bb" role="group" aria-label="HD theme">
+          <button type="button" data-theme="hd" aria-pressed="true">Neon</button>
+          <button type="button" data-theme="cl" aria-pressed="false">Classic HD</button>
+          <span><span class="en">in game: <kbd>T</kbd></span><span class="ru">в игре: <kbd>T</kbd></span></span>
+        </div>
+        <div class="compare" data-set="bb">
+          <img class="under" alt="Ball Breaker, original ZX Spectrum graphics">
+          <img class="over" alt="Ball Breaker, remake">
+          <span class="tag l">ZX SPECTRUM</span>
+          <span class="tag r">HD</span>
+          <span class="bar"></span>
+        </div>
+        <div class="thumbs" data-for="bb"></div>
+      </div>
+      <div>
+        <div class="year">CRL Group · 1987 · 128K</div>
+        <h3>Ball Breaker</h3>
+        <p class="en">Breakout in a 3D room: the bricks are stacked in towers, bricks above fall when you knock out the ones below, and creatures crawl out to eat your bat. Fifty screens, missiles, bombs and bonus blocks.</p>
+        <p class="ru">Арканоид в трёхмерной комнате: кирпичи сложены в башни, верхние падают, когда выбиваешь нижние, а из кирпичей вылезают существа, которые норовят съесть биту. Пятьдесят экранов, ракеты, бомбы и бонусные блоки.</p>
+        <ul class="en">
+          <li>Every room and brick redrawn in HD, in two looks: Neon and Classic HD</li>
+          <li>Smooth ball, bat and creatures; light, trails and explosions</li>
+          <li>Remastered music and sound, gamepad support, unlimited lives and missiles if you want them</li>
+        </ul>
+        <ul class="ru">
+          <li>Все комнаты и кирпичи заново нарисованы в HD, в двух вариантах: Neon и Classic HD</li>
+          <li>Плавные мяч, бита и существа; свет, шлейфы и взрывы</li>
+          <li>Обновлённые музыка и звук, поддержка геймпада, бесконечные жизни и ракеты по желанию</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="next">
+      <strong><span class="en">More ZX Spectrum games are coming.</span><span class="ru">Будут и другие игры ZX Spectrum.</span></strong>
+      <span class="en">Each one is added the same way: the original runs as it is, and the remake learns to read it and draw it anew.</span>
+      <span class="ru">Каждая добавляется так же: оригинал работает как есть, а ремейк учится читать его и рисовать заново.</span>
+    </div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <h2><span class="en">Download</span><span class="ru">Скачать</span></h2>
+    <p class="lead">
+      <span class="en">The remakes are free. You’ll need your own copy of the original game to play.</span>
+      <span class="ru">Ремейки бесплатные. Для игры понадобится своя копия оригинальной игры.</span>
+    </p>
+    <div class="note" style="margin-bottom:24px">
+      <strong><span class="en">This is a beta.</span><span class="ru">Это бета-версия.</span></strong>
+      <span class="en">You can play now, though bugs are still being fixed and the art is still being polished. If something goes wrong, please <a href="https://github.com/adjioev/zx-remakes/issues">report it on GitHub</a>.</span>
+      <span class="ru">Играть уже можно, но ошибки ещё исправляются, а графика дорабатывается. Если что-то не так, <a href="https://github.com/adjioev/zx-remakes/issues">напишите об этом на GitHub</a>.</span>
+    </div>
+    <div class="btns" style="justify-content:flex-start">
+      <a class="btn" href="https://github.com/adjioev/zx-remakes/releases/latest/download/ZXRemakes-windows.zip">Windows <small>64-bit · zip</small></a>
+      <a class="btn" href="https://github.com/adjioev/zx-remakes/releases/latest/download/ZXRemakes-linux-x86_64.tar.gz">Linux <small>x86-64 · tar.gz</small></a>
+      <a class="btn alt" href="https://github.com/adjioev/zx-remakes/releases"><span class="en">All releases</span><span class="ru">Все версии</span></a>
+    </div>
+    <p style="color:var(--dim);margin-top:22px">
+      <span class="en">A macOS download is planned. Windows may warn about an unknown publisher (the program is not signed): choose <em>More info → Run anyway</em>.</span>
+      <span class="ru">Версия для macOS тоже будет. Windows может предупредить о неизвестном издателе (программа не подписана): выберите <em>Подробнее → Выполнить в любом случае</em>.</span>
+    </p>
+  </div>
+</section>
+
+<section id="play">
+  <div class="wrap">
+    <h2><span class="en">How to play</span><span class="ru">Как играть</span></h2>
+    <div class="note" style="margin-bottom:28px">
+      <strong><span class="en">The original games are not included.</span><span class="ru">Оригинальные игры не входят в комплект.</span></strong>
+      <span class="en">You’ll need the game file listed below. The remake checks that it’s the right version and leaves your file unchanged.</span>
+      <span class="ru">Понадобится файл игры, указанный ниже. Ремейк проверяет, что версия та самая, и ваш файл не меняет.</span>
+    </div>
+    <div class="cards">
+      <div class="card">
+        <div class="step">1</div>
+        <h3><span class="en">Unpack and run</span><span class="ru">Распакуйте и запустите</span></h3>
+        <p class="en">Extract the archive and run <code>ZXRemakes.exe</code> (Windows) or <code>./zxremakes</code> (Linux).</p>
+        <p class="ru">Распакуйте архив и запустите <code>ZXRemakes.exe</code> (Windows) или <code>./zxremakes</code> (Linux).</p>
+      </div>
+      <div class="card">
+        <div class="step">2</div>
+        <h3><span class="en">Drop in your game</span><span class="ru">Перетащите игру</span></h3>
+        <p class="en">Drag the game file (or the zip it came in) onto the window. It is remembered, so you only do this once:</p>
+        <p class="ru">Перетащите файл игры (или zip-архив с ним) в окно. Он запоминается, так что это нужно сделать один раз:</p>
+        <ul>
+          <li><em>Ball Breaker</em>: <code>Ball Breaker (1987)(CRL Group)[128K].z80</code></li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="step">3</div>
+        <h3><span class="en">Play</span><span class="ru">Играйте</span></h3>
+        <p class="en">Choose the game and press <kbd>Enter</kbd>. <kbd>Esc</kbd> pauses; <kbd>Tab</kbd> flips between the original and the HD graphics at any time.</p>
+        <p class="ru">Выберите игру и нажмите <kbd>Enter</kbd>. <kbd>Esc</kbd> ставит паузу; <kbd>Tab</kbd> в любой момент переключает оригинальную и HD-графику.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="keys">
+  <div class="wrap">
+    <h2><span class="en">Controls</span><span class="ru">Управление</span></h2>
+    <div class="cards">
+      <div class="card">
+        <h3><span class="en">All games</span><span class="ru">Во всех играх</span></h3>
+        <table class="keys">
+          <tr><td><kbd>Esc</kbd></td><td><span class="en">pause: jump to a level, sound, back to the list</span><span class="ru">пауза: переход на уровень, звук, выход к списку игр</span></td></tr>
+          <tr><td><kbd>Tab</kbd> / <kbd>R</kbd></td><td><span class="en">original 1987 / remake (picture and sound)</span><span class="ru">оригинал / ремейк (картинка и звук)</span></td></tr>
+          <tr><td><kbd>T</kbd></td><td><span class="en">HD theme</span><span class="ru">HD-оформление</span></td></tr>
+          <tr><td><kbd>F11</kbd></td><td><span class="en">full screen</span><span class="ru">полный экран</span></td></tr>
+          <tr><td><span class="en">gamepad</span><span class="ru">геймпад</span></td><td><span class="en">works as a Kempston joystick; Start pauses</span><span class="ru">работает как джойстик Kempston; Start — пауза</span></td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h3>Ball Breaker</h3>
+        <table class="keys">
+          <tr><td><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd></td><td><span class="en">move the bat</span><span class="ru">двигать биту</span></td></tr>
+          <tr><td><kbd>Space</kbd> / <kbd>Ctrl</kbd></td><td><span class="en">fire a missile</span><span class="ru">выпустить ракету</span></td></tr>
+          <tr><td><kbd>L</kbd></td><td><span class="en">unlimited lives</span><span class="ru">бесконечные жизни</span></td></tr>
+          <tr><td><kbd>K</kbd></td><td><span class="en">unlimited missiles</span><span class="ru">бесконечные ракеты</span></td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="about">
+  <div class="wrap about">
+    <h2><span class="en">About the project</span><span class="ru">О проекте</span></h2>
+    <p class="en">These remakes don’t rewrite the games. Each one runs the original ZX Spectrum program, unmodified, in an emulator at its own speed. Every frame the remake reads the game’s state from the Spectrum’s memory (the level, the bricks, the ball, the creatures) and draws new art in the same places. So the rules, the timing and the quirks are the original’s; only the look and the sound are new.</p>
+    <p class="ru">Эти ремейки не переписывают игры. Каждый запускает оригинальную программу для ZX Spectrum без изменений, в эмуляторе и с её родной скоростью. Каждый кадр ремейк читает состояние игры из памяти Спектрума (уровень, кирпичи, мяч, существ) и рисует на тех же местах новую графику. Правила, темп и все особенности остаются оригинальными, новые только картинка и звук.</p>
+    <p class="en">Press <kbd>Tab</kbd> while playing to see the 1987 original at any moment.</p>
+    <p class="ru">Нажмите <kbd>Tab</kbd> во время игры, чтобы в любой момент увидеть оригинал 1987 года.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2><span class="en">Thank you</span><span class="ru">Спасибо</span></h2>
+    <p class="lead" style="margin-bottom:0">
+      <span class="en">To the programmers, artists and musicians who made these games for the ZX Spectrum, and to Andre Weissflog for the <a href="https://github.com/floooh/chips">chips</a> emulators the remakes run on.</span>
+      <span class="ru">Программистам, художникам и музыкантам, которые сделали эти игры для ZX Spectrum, и Андре Вайсфлогу за эмуляторы <a href="https://github.com/floooh/chips">chips</a>, на которых работают ремейки.</span>
+    </p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <span class="en">A free, non-commercial fan project, not affiliated with or endorsed by the original publishers or rights holders. <em>Ball Breaker</em> is © CRL Group.</span>
+      <span class="ru">Бесплатный некоммерческий фанатский проект, не связанный с оригинальными издателями и правообладателями. <em>Ball Breaker</em> © CRL Group.</span>
+    </p>
+    <p>
+      <span class="en">Code under the GPL-2.0 license; the new art is for personal, non-commercial use.</span>
+      <span class="ru">Код под лицензией GPL-2.0; новая графика — для личного некоммерческого использования.</span>
+      <a href="https://github.com/adjioev/zx-remakes">GitHub</a>
+    </p>
+  </div>
+</footer>
+
+<script>
+// language: saved choice, else the browser's
+(function () {
+  var saved = null;
+  try { saved = localStorage.getItem('lang'); } catch (e) {}
+  var lang = saved || ((navigator.language || 'en').toLowerCase().indexOf('ru') === 0 ? 'ru' : 'en');
+  function set(l) {
+    document.documentElement.lang = l;
+    document.querySelectorAll('[data-set-lang]').forEach(function (b) { b.setAttribute('aria-pressed', b.dataset.setLang === l); });
+  }
+  document.querySelectorAll('[data-set-lang]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      set(b.dataset.setLang);
+      try { localStorage.setItem('lang', b.dataset.setLang); } catch (e) {}
+    });
+  });
+  set(lang);
+})();
+
+// before / after sliders, a row of screens under each, and the HD themes above
+var SETS = { bb: 5 };
+document.querySelectorAll('.compare').forEach(function (box) {
+  var set = box.dataset.set, under = box.querySelector('.under'), over = box.querySelector('.over');
+  var thumbs = document.querySelector('.thumbs[data-for="' + set + '"]');
+  var themes = document.querySelector('.themes[data-for="' + set + '"]');
+  var cur = 1, theme = 'hd';
+  function show(i) {
+    cur = i;
+    under.src = 'img/' + set + '-og-' + i + '.webp';
+    over.src = 'img/' + set + '-' + theme + '-' + i + '.webp';
+    thumbs.querySelectorAll('button').forEach(function (b, k) {
+      b.setAttribute('aria-pressed', k + 1 === i);
+      b.querySelector('img').src = 'img/' + set + '-' + theme + '-' + (k + 1) + '.webp';
+    });
+  }
+  for (var i = 1; i <= SETS[set]; i++) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = '<img alt="" loading="lazy">';
+    b.addEventListener('click', show.bind(null, i));
+    thumbs.appendChild(b);
+  }
+  if (themes) themes.querySelectorAll('[data-theme]').forEach(function (t) {
+    t.addEventListener('click', function () {
+      theme = t.dataset.theme;
+      themes.querySelectorAll('[data-theme]').forEach(function (u) { u.setAttribute('aria-pressed', u === t); });
+      show(cur);
+    });
+  });
+  show(1);
+  function move(e) {
+    var r = box.getBoundingClientRect();
+    var x = Math.max(0, Math.min(1, ((e.touches ? e.touches[0].clientX : e.clientX) - r.left) / r.width));
+    box.style.setProperty('--cut', (x * 100) + '%');
+  }
+  var down = false;
+  box.addEventListener('pointerdown', function (e) { down = true; move(e); });
+  window.addEventListener('pointerup', function () { down = false; });
+  box.addEventListener('pointermove', function (e) { if (down || e.pointerType === 'mouse') move(e); });
+});
+</script>
+</body>
+</html>

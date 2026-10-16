@@ -7,7 +7,11 @@ The original games are not included: `original/` is local only.
 
 ## Games
 
-- **Ball Breaker** (CRL Group, 1987, 128K) - planned.
+- **Ball Breaker** (CRL Group, 1987, 128K) - playable (beta).
+
+Website and downloads: https://adjioev.github.io/zx-remakes/ (Windows and Linux builds are made by
+`.github/workflows/build.yml` for a `v*` tag). Drop your own `Ball Breaker (1987)(CRL Group)[128K].z80`
+(or the zip it came in) onto the window.
 
 ## Ball Breaker graphics
 

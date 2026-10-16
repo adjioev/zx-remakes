@@ -24,7 +24,19 @@ add_executable(zxremakes
   src/sfx.cpp
   src/gamepad.cpp
   src/gamefile.cpp)
-target_link_libraries(zxremakes PRIVATE PkgConfig::RAYLIB)
+option(APP_BUNDLE "Release build for the downloads (see .github/workflows/build.yml)" OFF)
+if(APP_BUNDLE AND WIN32)
+  # MSYS2/MinGW: raylib's DLLs are shipped next to the .exe
+  target_link_libraries(zxremakes PRIVATE PkgConfig::RAYLIB -static-libgcc -static-libstdc++)
+  set_target_properties(zxremakes PROPERTIES WIN32_EXECUTABLE ON)  # no console window
+elseif(APP_BUNDLE AND NOT APPLE)
+  # Linux: raylib static (its raylib.pc lists no system libs: GL/X11 are added here)
+  target_include_directories(zxremakes PRIVATE ${RAYLIB_INCLUDE_DIRS})
+  target_link_libraries(zxremakes PRIVATE ${RAYLIB_STATIC_LDFLAGS} GL X11 m pthread dl rt
+    -static-libgcc -static-libstdc++)
+else()
+  target_link_libraries(zxremakes PRIVATE PkgConfig::RAYLIB)
+endif()
 if(APPLE)
   target_link_libraries(zxremakes PRIVATE "-framework Cocoa" "-framework IOKit" "-framework OpenGL")
 endif()

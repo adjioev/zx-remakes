@@ -1,0 +1,137 @@
+# Windows and Linux builds, run for a v* tag (the archives go to its GitHub release) or by
+# hand from the Actions tab (Run workflow: archives as workflow artifacts). Plain pushes
+# don't build. The emulator (floooh/chips) is vendored, so raylib is the only dependency.
+#   Windows: MSYS2 (UCRT64) with raylib from pacman, its DLLs next to the exe.
+#   Linux:   raylib (static) built from source on the oldest supported Ubuntu, so the binary
+#            runs on older glibc too.
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-raylib
+
+      - name: Build
+        run: |
+          cmake -S remaster -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAPP_BUNDLE=ON
+          cmake --build build
+
+      - name: Package
+        run: |
+          OUT="ZX Remakes"
+          mkdir -p "$OUT"
+          cp build/zxremakes.exe "$OUT/ZXRemakes.exe"
+          cp -r remaster/assets "$OUT/"
+          # the DLLs the exe needs from the MSYS2 tree (raylib, glfw, ...)
+          ldd build/zxremakes.exe | awk '/\/ucrt64\// {print $3}' | sort -u | xargs -r -I{} cp {} "$OUT/"
+          cp LICENSE README.md "$OUT/"
+          cat > "$OUT/HOW TO PLAY.txt" <<'EOF'
+          ZX Remakes: HD remakes of ZX Spectrum games
+
+          1. Run ZXRemakes.exe. A list of the games opens.
+          2. The original games are not included: drag your own copy onto the window.
+             Ball Breaker: "Ball Breaker (1987)(CRL Group)[128K].z80", or the zip it came in
+             It is remembered, so this is needed only once.
+          3. Choose a game, Enter to play.
+
+          Keys: Esc pause, Tab original / HD graphics, T HD theme, F11 full screen.
+          Ball Breaker: arrows move the bat, Space fires, L unlimited lives, K unlimited missiles.
+
+          Source and license (GPL-2.0): https://github.com/${{ github.repository }}
+          EOF
+          ls -la "$OUT"
+          zip -qr ZXRemakes-windows.zip "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZXRemakes-windows
+          path: ZXRemakes-windows.zip
+
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ZXRemakes-windows.zip
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libasound2-dev libpulse-dev
+
+      - name: raylib (static)
+        run: |
+          git clone --depth 1 --branch 6.0 https://github.com/raysan5/raylib.git /tmp/raylib
+          cmake -S /tmp/raylib -B /tmp/raylib/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DPLATFORM=Desktop -DGLFW_BUILD_WAYLAND=OFF
+          sudo cmake --build /tmp/raylib/build --target install
+
+      - name: Build
+        run: |
+          cmake -S remaster -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAPP_BUNDLE=ON
+          cmake --build build
+
+      - name: Package
+        run: |
+          OUT="ZX Remakes"
+          mkdir -p "$OUT"
+          cp build/zxremakes "$OUT/zxremakes"
+          cp -r remaster/assets "$OUT/"
+          ldd "$OUT/zxremakes"
+          cp LICENSE README.md "$OUT/"
+          cat > "$OUT/HOW TO PLAY.txt" <<'EOF'
+          ZX Remakes: HD remakes of ZX Spectrum games
+
+          1. Run ./zxremakes (from a terminal, or double-click it in your file manager).
+             A list of the games opens.
+          2. The original games are not included: drag your own copy onto the window.
+             Ball Breaker: "Ball Breaker (1987)(CRL Group)[128K].z80", or the zip it came in
+             It is remembered (~/.local/share), so this is needed only once.
+          3. Choose a game, Enter to play.
+
+          Keys: Esc pause, Tab original / HD graphics, T HD theme, F11 full screen.
+          Ball Breaker: arrows move the bat, Space fires, L unlimited lives, K unlimited missiles.
+
+          Source and license (GPL-2.0): https://github.com/${{ github.repository }}
+          EOF
+          ls -la "$OUT"
+          tar czf ZXRemakes-linux-x86_64.tar.gz "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZXRemakes-linux
+          path: ZXRemakes-linux-x86_64.tar.gz
+
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ZXRemakes-linux-x86_64.tar.gz
