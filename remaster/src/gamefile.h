@@ -59,6 +59,6 @@ std::vector<LoadedGame> find_games(const std::vector<std::string>& dirs, const s
 // copy every supported game found into dir; on none, set error.
 std::vector<LoadedGame> adopt_dropped(const std::string& path, const std::string& dir, std::string& error);
 
-// Download the game's file (GameInfo::download_url, with the system's curl) and adopt it as if
+// Download the game's file (GameInfo::download_url, net.h) and adopt it as if
 // dropped: recognised by SHA-1 and copied into dir. Blocks while downloading; on failure, error.
 std::vector<LoadedGame> download_game(const GameInfo& game, const std::string& dir, std::string& error);

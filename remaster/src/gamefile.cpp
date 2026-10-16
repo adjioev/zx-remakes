@@ -1,4 +1,5 @@
 #include "gamefile.h"
+#include "net.h"
 
 #include <cctype>
 #include <cstdio>
@@ -242,15 +243,12 @@ std::vector<LoadedGame> download_game(const GameInfo& game, const std::string& d
     fs::remove_all(tmp, ec);
     fs::create_directories(tmp, ec);
     fs::path file = tmp / fs::path(game.download_url).filename();
-    // curl comes with macOS, Windows 10+ and most Linux systems
-    std::string cmd = std::string("curl -fsSL --max-time 60 -o \"") + file.string() + "\" \"" + game.download_url + "\"";
-#ifndef _WIN32
-    cmd += " 2>/dev/null";
-#endif
+    std::vector<uint8_t> data;
     std::vector<LoadedGame> found;
-    if (std::system(cmd.c_str()) != 0 || !fs::is_regular_file(file, ec)) {
+    if (!http_get(game.download_url, data, 60)) {
         error = std::string("Could not download from ") + game.download_from + ": check the connection, or drop your own copy";
     } else {
+        std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
         found = adopt_dropped(file.string(), dir, error);
         if (found.empty()) error = std::string("The file from ") + game.download_from + " is not one this remake knows";
     }

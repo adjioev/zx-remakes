@@ -13,6 +13,7 @@
 // shows its HD title, or its own loading screen from the user's file.
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <future>
@@ -27,10 +28,43 @@
 
 #include "game.h"
 #include "gamefile.h"
+#include "net.h"
 
 namespace {
 
 constexpr const char* WINDOW_TITLE = "ZX Remakes";
+constexpr const char* VERSION = APP_VERSION;  // the release tag (v1.2.3), "dev" for local builds
+constexpr const char* RELEASES = "https://api.github.com/repos/adjioev/zx-remakes/releases/latest";
+constexpr const char* DOWNLOAD_PAGE = "https://adjioev.github.io/zx-remakes/#download";
+
+// "v1.2.3" -> {1, 2, 3}; empty if it is not a version
+std::vector<int> version_numbers(const std::string& v) {
+    std::vector<int> out;
+    size_t i = !v.empty() && (v[0] == 'v' || v[0] == 'V') ? 1 : 0;
+    while (i < v.size() && std::isdigit(static_cast<unsigned char>(v[i]))) {
+        int n = 0;
+        while (i < v.size() && std::isdigit(static_cast<unsigned char>(v[i]))) n = n * 10 + (v[i++] - '0');
+        out.push_back(n);
+        if (i < v.size() && v[i] == '.') i++;
+    }
+    return i == v.size() ? out : std::vector<int>{};
+}
+
+// The newest release's tag if it is newer than this build, else "" (also: a dev build, no network).
+std::string newer_release() {
+    auto mine = version_numbers(VERSION);
+    if (mine.empty()) return "";
+    std::vector<uint8_t> body;
+    if (!http_get(RELEASES, body, 5)) return "";
+    std::string json(body.begin(), body.end());
+    size_t k = json.find("\"tag_name\"");
+    if (k == std::string::npos) return "";
+    size_t a = json.find('"', json.find(':', k) + 1), b = a == std::string::npos ? a : json.find('"', a + 1);
+    if (b == std::string::npos) return "";
+    std::string tag = json.substr(a + 1, b - a - 1);
+    auto theirs = version_numbers(tag);
+    return !theirs.empty() && theirs > mine ? tag : "";
+}
 
 const LoadedGame* find(const std::vector<LoadedGame>& games, GameId id) {
     for (const auto& g : games)
@@ -107,6 +141,9 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
                 if (GAMES[k].id == g.variant->game) sel = int(k);
         }
     };
+    // a newer release: looked up once in the background, then offered (U opens the download page)
+    static std::future<std::string> update = std::async(std::launch::async, newer_release);
+    static std::string newer;
     // downloading a game: asked first (ask), then in the background (download)
     const GameInfo* ask = nullptr;
     std::future<std::pair<std::vector<LoadedGame>, std::string>> download;
@@ -152,6 +189,8 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             if (!found.empty()) error.clear();
             downloading.clear();
         }
+        if (update.valid() && update.wait_for(std::chrono::seconds(0)) == std::future_status::ready) newer = update.get();
+        if (!newer.empty() && pressed(KEY_U)) OpenURL(DOWNLOAD_PAGE);
         int n = int(GAMES.size());
         const GameInfo& cur = GAMES[size_t(sel)];
         bool go = pressed(KEY_ENTER) || pressed(KEY_KP_ENTER) || pressed(KEY_SPACE);
@@ -224,6 +263,11 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
                 ty + 44, 22, Fade(RAYWHITE, 0.55f));
         if (!downloading.empty()) centred(downloading.c_str(), w / 2, ty + 88, 22, {255, 214, 96, 255});
         else if (!error.empty()) centred(error.c_str(), w / 2, ty + 88, 22, {255, 110, 90, 255});
+        DrawText(VERSION, 16, int(h) - 30, 18, Fade(RAYWHITE, 0.35f));
+        if (!newer.empty()) {
+            std::string up = "Version " + newer + " is out:  U  opens the download page";
+            centred(up.c_str(), w / 2, h - 52, 24, {120, 230, 140, 255});
+        }
         if (ask) {  // the question, over everything
             DrawRectangle(0, 0, int(w), int(h), Fade(BLACK, 0.7f));
             float bw = std::min(w * 0.9f, 1100.0f), bh = 260, bx = (w - bw) / 2, by = (h - bh) / 2;

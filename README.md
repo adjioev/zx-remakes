@@ -9,8 +9,8 @@ The original games are not included: `original/` is local only.
 
 - **Ball Breaker** (CRL Group, 1987, 128K) - playable (beta).
 
-Website and downloads: https://adjioev.github.io/zx-remakes/ (Windows and Linux builds are made by
-`.github/workflows/build.yml` for a `v*` tag). Drop your own copy onto the window: `BallBreaker.tap.zip`
+Website and downloads: https://adjioev.github.io/zx-remakes/ (Windows, macOS and Linux builds are made by
+`.github/workflows/build.yml` for a `v*` tag; `tools/mac_app.sh` packages the .app). Drop your own copy onto the window: `BallBreaker.tap.zip`
 (Spectrum Computing / World of Spectrum; the tape is loaded at once through the ROM) or TOSEC's
 `Ball Breaker (1987)(CRL Group)[128K].z80`, or the zip either came in.
 
