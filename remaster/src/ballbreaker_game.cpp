@@ -52,6 +52,7 @@ constexpr uint16_t LEVEL = 0x8070, SCORE = 0x8044, MISSILES = 0x8071, LIVES = 0x
 constexpr uint16_t OBJECTS = 0xF3EB, OBJECTS_END = 0x804C;  // 10-byte objects, end pointer
 constexpr uint16_t SPRITES = 0xB9D5;
 constexpr int LEVELS = 50;
+constexpr uint16_t TRAINER = 0x8C00;  // DEC (HL) (0x35): a life lost
 constexpr uint8_t START_LIVES = 3, START_MISSILES = 10;  // what a new game gives (0x8B5C)
 
 // The room (0-6 = A-G) of each level, 1-based groups as in the notes.
@@ -205,6 +206,9 @@ void BallBreakerView::after_frame(Spectrum& s) {
     if (mode_ == Mode::Play && s.peek(LIVES) < lives_)
         sfx_.push_back({Sfx::LifeLost, 0, 0.9f});  // (unlimited: lost, then given back)
     lives_ = s.peek(LIVES);
+    // the tape's trainer (T on its loading screen: POKE 35840,0 NOPs the DEC (HL) that takes a life,
+    // 0x8C00) is undone: lives are the original's, or the L option's
+    if (s.peek(TRAINER) == 0x00) s.poke(TRAINER, 0x35);
     if (mode_ == Mode::Play) {
         if (unlimited_lives_ && s.peek(LIVES) < START_LIVES) s.poke(LIVES, START_LIVES);
         if (unlimited_missiles_ && s.peek(MISSILES) < START_MISSILES) s.poke(MISSILES, START_MISSILES);

@@ -68,8 +68,12 @@ void unzip_into(const std::vector<uint8_t>& z, std::vector<std::vector<uint8_t>>
 }  // namespace
 
 const std::vector<GameInfo> GAMES = {
-    {GameId::BallBreaker, "ballbreaker", "Ball Breaker", "ballbreaker.z80",
-     "Ball Breaker (CRL, 1987) .z80, or the zip it came in"},
+    {GameId::BallBreaker, "ballbreaker", "Ball Breaker",
+     "Ball Breaker (CRL, 1987) .z80 or .tap, or the zip it came in",
+     // the archive's entry: https://spectrumcomputing.co.uk/entry/383/ZX-Spectrum/Ball_Breaker
+     // (availability: "Available"); BALLBREA.TAP inside
+     "https://spectrumcomputing.co.uk/pub/sinclair/games/b/BallBreaker.tap.zip", "spectrumcomputing.co.uk",
+     "BallBreaker.tap.zip, 23 KB"},
 };
 
 const GameInfo& game_info(GameId id) {
@@ -89,6 +93,10 @@ const std::vector<GameVariant> GAME_VARIANTS = {
     // screen, waiting for a key.
     {GameId::BallBreaker, "Ball Breaker (1987)(CRL Group)[128K].z80", "beb0d14204369f3e2fa5d5f8bddb17ffefe788b8",
      FileFormat::Z80},
+    // "BALLBREA.TAP" in BallBreaker.tap.zip (Spectrum Computing / World of Spectrum), the same as
+    // TOSEC's "[t][128K].tap": BASIC "Ballbreak" (its trainer only on T), "balloader", screen,
+    // code. Loaded, its game code is the .z80's.
+    {GameId::BallBreaker, "BALLBREA.TAP", "7fa2b0dfbc642eed7b410545c09e82a861abf262", FileFormat::Tap},
 };
 
 std::optional<LoadedGame> identify(const std::vector<uint8_t>& data) {
@@ -204,7 +212,11 @@ std::vector<LoadedGame> adopt_dropped(const std::string& path, const std::string
         bool have = false;
         for (const auto& g : found) have |= g.variant->game == game->variant->game;
         if (have) continue;
-        std::ofstream out(dir + game_info(game->variant->game).file, std::ios::binary);
+        // saved as <key>.z80 / <key>.tap; one copy per game (the other format's goes)
+        const std::string base = dir + game_info(game->variant->game).key;
+        const bool tap = game->variant->format == FileFormat::Tap;
+        std::filesystem::remove(base + (tap ? ".z80" : ".tap"), ec);
+        std::ofstream out(base + (tap ? ".tap" : ".z80"), std::ios::binary);
         out.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
         if (!out) {
             error = "Could not save the file to " + dir;
@@ -216,5 +228,32 @@ std::vector<LoadedGame> adopt_dropped(const std::string& path, const std::string
         error = "No supported game found there. Drop ";
         for (const auto& g : GAMES) error += std::string(g.drop) + (&g == &GAMES.back() ? "." : ", or ");
     }
+    return found;
+}
+
+std::vector<LoadedGame> download_game(const GameInfo& game, const std::string& dir, std::string& error) {
+    namespace fs = std::filesystem;
+    if (!game.download_url) {
+        error = "No download for this game";
+        return {};
+    }
+    std::error_code ec;
+    fs::path tmp = fs::path(dir) / "download";
+    fs::remove_all(tmp, ec);
+    fs::create_directories(tmp, ec);
+    fs::path file = tmp / fs::path(game.download_url).filename();
+    // curl comes with macOS, Windows 10+ and most Linux systems
+    std::string cmd = std::string("curl -fsSL --max-time 60 -o \"") + file.string() + "\" \"" + game.download_url + "\"";
+#ifndef _WIN32
+    cmd += " 2>/dev/null";
+#endif
+    std::vector<LoadedGame> found;
+    if (std::system(cmd.c_str()) != 0 || !fs::is_regular_file(file, ec)) {
+        error = std::string("Could not download from ") + game.download_from + ": check the connection, or drop your own copy";
+    } else {
+        found = adopt_dropped(file.string(), dir, error);
+        if (found.empty()) error = std::string("The file from ") + game.download_from + " is not one this remake knows";
+    }
+    fs::remove_all(tmp, ec);
     return found;
 }

@@ -22,6 +22,9 @@ public:
 
     // A machine of the model the snapshot needs, with it loaded; nothing if it can't be.
     static std::unique_ptr<Spectrum> from_z80(const std::vector<uint8_t>& snapshot);
+    // A 128K loading a .tap through its Tape Loader, at once; returned waiting on the program's
+    // first PAUSE after the tape (the loading screen). nullptr if nothing was loaded.
+    static std::unique_ptr<Spectrum> from_tap(const std::vector<uint8_t>& tape);
     ~Spectrum();
     Spectrum(const Spectrum&) = delete;
     Spectrum& operator=(const Spectrum&) = delete;

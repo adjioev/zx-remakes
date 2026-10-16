@@ -16,6 +16,29 @@ std::unique_ptr<Spectrum> Spectrum::from_z80(const std::vector<uint8_t>& snapsho
     return s;
 }
 
+std::unique_ptr<Spectrum> Spectrum::from_tap(const std::vector<uint8_t>& tape) {
+    zxc_t* zx = zxc_create(128, SAMPLE_RATE);
+    if (!zx) return nullptr;
+    std::unique_ptr<Spectrum> s(new Spectrum(zx));
+    if (!zxc_insert_tap(zx, tape.data(), tape.size())) return nullptr;
+    // the 128's menu, Tape Loader (Enter), and the tape read at once through the ROM; then on until
+    // the program waits in a PAUSE (the loading screen, where a .z80 of it is taken), at most 30 s
+    int done = -1;
+    for (int f = 0; f < 1500; f++) {
+        bool untouched = zxc_tape_left(zx) == tape.size();
+        if (untouched && f % 100 == 60) zxc_key(zx, 0x0D, true);
+        if (f % 100 == 64) zxc_key(zx, 0x0D, false);
+        zxc_run_frame(zx);
+        if (done < 0 && zxc_tape_left(zx) == 0) done = f;
+        uint16_t pc = zxc_regs(zx).pc;
+        if (done >= 0 && f - done >= 10 && pc >= 0x1F3A && pc <= 0x1F54) break;  // ROM PAUSE (0x1F3A)
+    }
+    if (done < 0) return nullptr;
+    float drop[1024];
+    while (zxc_audio(zx, drop, 1024) > 0) {}  // the boot's sound is not the game's
+    return s;
+}
+
 void Spectrum::run_frame() {
     zxc_run_frame(zx_);
     frames_++;

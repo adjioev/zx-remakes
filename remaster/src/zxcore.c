@@ -29,6 +29,8 @@ struct zxc {
     bool jump;
     uint16_t jump_at, jump_to, jump_sp;
     uint64_t cpu_ticks;
+    uint8_t* tape;  // a .tap image (blocks: [length word][flag, data..., checksum]), loaded by the ROM trap
+    size_t tape_size, tape_pos;
     float ring[AUDIO_RING];
     unsigned ring_w, ring_r;  // only touched by the thread that runs the emulator
 };
@@ -100,7 +102,7 @@ zxc_t* zxc_create(int model, int sample_rate) {
 }
 
 void zxc_destroy(zxc_t* zx) {
-    if (zx) zx_discard(&zx->sys);
+    if (zx) zx_discard(&zx->sys), free(zx->tape);
     free(zx);
 }
 
@@ -190,6 +192,57 @@ static uint64_t maybe_jump(zxc_t* zx, uint64_t pins) {
     return pins;
 }
 
+// The ROM's LD-BYTES (0x0556 in the 48K BASIC ROM), done at once from the tape image: A = the
+// flag byte wanted, IX = where, DE = how many, carry = load (else verify). Blocks with another
+// flag are passed over, as the ROM does. Returns as LD-BYTES does (carry = success, interrupts
+// on again) to the caller's return address.
+static uint64_t maybe_tape(zxc_t* zx, uint64_t pins) {
+    if ((pins & (Z80_M1 | Z80_MREQ | Z80_RD)) != (Z80_M1 | Z80_MREQ | Z80_RD) || Z80_GET_ADDR(pins) != 0x0556)
+        return pins;
+    zx_t* sys = &zx->sys;
+    if (sys->type == ZX_TYPE_128 && !(sys->last_mem_config & 0x10)) return pins;  // the 128 editor ROM
+    z80_t* c = &sys->cpu;
+    bool ok = false;
+    while (zx->tape_pos + 2 <= zx->tape_size) {
+        size_t len = zx->tape[zx->tape_pos] | zx->tape[zx->tape_pos + 1] << 8;
+        const uint8_t* b = zx->tape + zx->tape_pos + 2;
+        if (zx->tape_pos + 2 + len > zx->tape_size) break;
+        zx->tape_pos += 2 + len;
+        if (len < 2 || b[0] != c->a) continue;
+        size_t n = len - 2 < c->de ? len - 2 : c->de;
+        bool same = true;
+        for (size_t i = 0; i < n; i++) {
+            uint16_t at = (uint16_t)(c->ix + i);
+            if (c->f & Z80_CF) mem_wr(&sys->mem, at, b[1 + i]);
+            else same &= mem_rd(&sys->mem, at) == b[1 + i];
+        }
+        ok = n == c->de && same;
+        c->ix = (uint16_t)(c->ix + n), c->de = (uint16_t)(c->de - n);
+        break;
+    }
+    c->f = ok ? (uint8_t)(c->f | Z80_CF) : (uint8_t)(c->f & ~Z80_CF);
+    c->iff1 = c->iff2 = true;
+    uint16_t ret = (uint16_t)(mem_rd(&sys->mem, c->sp) | mem_rd(&sys->mem, (uint16_t)(c->sp + 1)) << 8);
+    c->sp = (uint16_t)(c->sp + 2);
+    return z80_prefetch(c, ret);  // drops this fetch, carries on at the caller
+}
+
+bool zxc_insert_tap(zxc_t* zx, const uint8_t* data, size_t size) {
+    for (size_t pos = 0; pos < size;) {  // whole blocks only
+        if (pos + 2 > size) return false;
+        pos += 2 + (data[pos] | data[pos + 1] << 8);
+        if (pos > size) return false;
+    }
+    free(zx->tape);
+    zx->tape = (uint8_t*)malloc(size ? size : 1);
+    if (!zx->tape) return false;
+    memcpy(zx->tape, data, size);
+    zx->tape_size = size, zx->tape_pos = 0;
+    return true;
+}
+
+size_t zxc_tape_left(const zxc_t* zx) { return zx->tape ? zx->tape_size - zx->tape_pos : 0; }
+
 void zxc_jump_at(zxc_t* zx, uint16_t at_pc, uint16_t to_pc, uint16_t sp) {
     zx->jump = true;
     zx->jump_at = at_pc, zx->jump_to = to_pc, zx->jump_sp = sp;
@@ -211,6 +264,7 @@ void zxc_run_frame(zxc_t* zx) {
         zx->cpu_ticks++;
         if (hooked) on_tick(zx, pins);
         if (zx->jump) pins = maybe_jump(zx, pins);
+        if (zx->tape) pins = maybe_tape(zx, pins);
         if (zx->turbo > 1 && !zx->yielded) {
             zx->turbo_acc += zx->turbo - 1;
             while (zx->turbo_acc >= 1 && !zx->yielded) {
@@ -219,6 +273,7 @@ void zxc_run_frame(zxc_t* zx) {
                 zx->cpu_ticks++;
                 if (hooked) on_tick(zx, pins);
                 if (zx->jump) pins = maybe_jump(zx, pins);
+                if (zx->tape) pins = maybe_tape(zx, pins);
             }
         }
     }

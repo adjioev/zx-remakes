@@ -17,14 +17,17 @@ struct GameInfo {
     GameId id;
     const char* key;      // short name: --game, assets/<key>/
     const char* title;
-    const char* file;     // name the dropped copy is saved under
     const char* drop;     // what to drop, as the user sees the game's files
+    // where a copy can be downloaded with the player's OK (a zip of a supported release), or none
+    const char* download_url;
+    const char* download_from;  // the site, as the player is told
+    const char* download_what;  // the file and its size, as the player is told
 };
 extern const std::vector<GameInfo> GAMES;
 const GameInfo& game_info(GameId id);
 const GameInfo* game_by_key(const std::string& key);
 
-enum class FileFormat { Z80 };
+enum class FileFormat { Z80, Tap };
 
 // A release (file) of a game the remake's addresses are mapped for.
 struct GameVariant {
@@ -55,3 +58,7 @@ std::vector<LoadedGame> find_games(const std::vector<std::string>& dirs, const s
 // Check what was dropped (a file, a folder, a .zip, or a file with the game next to it) and
 // copy every supported game found into dir; on none, set error.
 std::vector<LoadedGame> adopt_dropped(const std::string& path, const std::string& dir, std::string& error);
+
+// Download the game's file (GameInfo::download_url, with the system's curl) and adopt it as if
+// dropped: recognised by SHA-1 and copied into dir. Blocks while downloading; on failure, error.
+std::vector<LoadedGame> download_game(const GameInfo& game, const std::string& dir, std::string& error);

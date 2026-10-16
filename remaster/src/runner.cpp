@@ -8,7 +8,7 @@
 // letters (GameView::letters_free), F11 full screen. Switching views dissolves one into the
 // other through growing and shrinking pixels (as in Opera Soft Remastered).
 //
-//   zxremakes --test <out_dir> [--game <key>] [script]
+//   zxremakes --test <out_dir> [--game <key>] [--file <game file>] [script]
 //     Script tokens: "<sec>+<key>", "<sec>-<key>", "<sec>@<cmd>"; sec = seconds of game time
 //     (50 frames each). Keys are the player's, as on the PC: a-z 0-9 space enter ctrl shift
 //     alt backspace left right up down, and the gamepad pa pb px (buttons), pl pr pu pd.
@@ -193,7 +193,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             return GameExit::Quit;
         }
     }
-    std::unique_ptr<Spectrum> spec = Spectrum::from_z80(game.data);
+    std::unique_ptr<Spectrum> spec = (game.variant->format == FileFormat::Tap ? Spectrum::from_tap(game.data) : Spectrum::from_z80(game.data));
     if (!spec) {
         TraceLog(LOG_ERROR, "Could not load %s", game.variant->name);
         return GameExit::Back;

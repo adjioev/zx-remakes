@@ -4,16 +4,22 @@
 //
 //   zxremakes [path/to/game file] [assets dir]
 //   zxremakes --test <out_dir> [--game <key>] [script]   scripted run (see runner.cpp);
-//                                                         --game list: capture the game list
+//                                                         --game list: the game list, captured, or
+//     driven by a script: "<sec>+<key>" presses a key (enter escape left right d y n), "<sec>@shot"
+//     (game_list_<n>.png), "<sec>@quit"; a game chosen then plays a second (shot_000.png)
 //
 // Game list: left/right choose, Enter play, drop a game file (or its zip / folder) onto the
-// window to add it. A game's card shows its own loading screen, from the user's file.
+// window to add it, or (a game without a file) Enter to download it, after a yes. A game's card
+// shows its HD title, or its own loading screen from the user's file.
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <future>
 #include <map>
 #include <optional>
+#include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -41,7 +47,7 @@ Texture2D cover_of(const LoadedGame& g, const std::string& assets) {
         SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
         return t;
     }
-    auto spec = Spectrum::from_z80(g.data);
+    auto spec = (g.variant->format == FileFormat::Tap ? Spectrum::from_tap(g.data) : Spectrum::from_z80(g.data));
     if (!spec) return {};
     std::vector<uint32_t> px(Spectrum::SCREEN_W * Spectrum::SCREEN_H);
     Spectrum::screen_rgba(spec->screen(), px.data());
@@ -53,9 +59,26 @@ Texture2D cover_of(const LoadedGame& g, const std::string& assets) {
 
 // The game list: one card per known game; the ones without a file are greyed out and ask for
 // it to be dropped. Returns the chosen game, or nothing when the window closes.
-// test_dir set: captures this screen once and returns.
+// test_dir set: captures this screen once and returns, or follows script (see the top).
 std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::string& data_dir, const std::string& assets,
-                                const std::string& test_dir) {
+                                const std::string& test_dir, const std::string& script = "") {
+    struct Step {
+        double t;
+        std::string what;  // a key, or @shot / @quit
+    };
+    std::vector<Step> steps;
+    {
+        std::istringstream in(script);
+        for (std::string tok; in >> tok;)
+            if (size_t at = tok.find_first_of("+@"); at != std::string::npos && at > 0)
+                steps.push_back({std::atof(tok.substr(0, at).c_str()), tok[at] == '@' ? tok.substr(at) : tok.substr(at + 1)});
+    }
+    size_t step = 0;
+    int shots = 0;
+    std::set<int> scripted;  // keys the script presses this frame
+    static const std::map<std::string, int> KEYS = {{"enter", KEY_ENTER}, {"escape", KEY_ESCAPE}, {"left", KEY_LEFT},
+                                                    {"right", KEY_RIGHT}, {"d", KEY_D}, {"y", KEY_Y}, {"n", KEY_N}};
+    auto pressed = [&](int key) { return IsKeyPressed(key) || scripted.count(key) > 0; };
     std::string error;
     int sel = 0;
     for (size_t i = 0; i < GAMES.size(); i++)
@@ -70,9 +93,41 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
         const LoadedGame* g = find(games, id);
         return covers[id] = g ? cover_of(*g, assets) : Texture2D{};
     };
+    // games found (dropped or downloaded): saved by now; they replace what the list had
+    auto take = [&](const std::vector<LoadedGame>& found) {
+        for (const LoadedGame& g : found) {
+            for (size_t k = 0; k < games.size(); k++)
+                if (games[k].variant->game == g.variant->game) games.erase(games.begin() + long(k));
+            games.push_back(g);
+            if (auto it = covers.find(g.variant->game); it != covers.end()) {
+                if (it->second.id) UnloadTexture(it->second);
+                covers.erase(it);
+            }
+            for (size_t k = 0; k < GAMES.size(); k++)
+                if (GAMES[k].id == g.variant->game) sel = int(k);
+        }
+    };
+    // downloading a game: asked first (ask), then in the background (download)
+    const GameInfo* ask = nullptr;
+    std::future<std::pair<std::vector<LoadedGame>, std::string>> download;
+    std::string downloading;
     std::optional<GameId> chosen;
     for (int frame = 0; !WindowShouldClose() && !chosen; frame++) {
-        if (!test_dir.empty() && frame == 10) {  // --test without a game: capture this screen, quit
+        scripted.clear();
+        bool quit = false;
+        for (double now = frame / 60.0; step < steps.size() && steps[step].t <= now; step++) {
+            const std::string& w = steps[step].what;
+            if (w == "@quit") quit = true;
+            else if (w == "@shot") {
+                Image shot = LoadImageFromScreen();
+                char name[64];
+                std::snprintf(name, sizeof name, "/game_list_%d.png", shots++);
+                ExportImage(shot, (test_dir + name).c_str());
+                UnloadImage(shot);
+            } else if (auto k = KEYS.find(w); k != KEYS.end()) scripted.insert(k->second);
+        }
+        if (quit) break;
+        if (!test_dir.empty() && steps.empty() && frame == 10) {  // --test without a game: capture this screen, quit
             Image shot = LoadImageFromScreen();
             ExportImage(shot, (test_dir + "/game_list.png").c_str());
             UnloadImage(shot);
@@ -82,28 +137,44 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             FilePathList files = LoadDroppedFiles();
             error.clear();
             bool any = false;
-            for (unsigned i = 0; i < files.count; i++)
-                for (const LoadedGame& g : adopt_dropped(files.paths[i], data_dir, error)) {
-                    any = true;
-                    for (size_t k = 0; k < games.size(); k++)
-                        if (games[k].variant->game == g.variant->game) games.erase(games.begin() + long(k));
-                    games.push_back(g);
-                    if (auto it = covers.find(g.variant->game); it != covers.end()) {
-                        if (it->second.id) UnloadTexture(it->second);
-                        covers.erase(it);
-                    }
-                    for (size_t k = 0; k < GAMES.size(); k++)
-                        if (GAMES[k].id == g.variant->game) sel = int(k);
-                }
-            if (any) error.clear();  // something was found: no complaint about the rest
+            for (unsigned i = 0; i < files.count; i++) {
+                auto found = adopt_dropped(files.paths[i], data_dir, error);
+                any |= !found.empty();
+                take(found);
+            }
+            if (any) error.clear(), ask = nullptr;  // something was found: no complaint about the rest
             UnloadDroppedFiles(files);
         }
+        if (download.valid() && download.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            auto [found, err] = download.get();
+            error = err;
+            take(found);
+            if (!found.empty()) error.clear();
+            downloading.clear();
+        }
         int n = int(GAMES.size());
-        if (IsKeyPressed(KEY_LEFT)) sel = (sel + n - 1) % n;
-        if (IsKeyPressed(KEY_RIGHT)) sel = (sel + 1) % n;
-        if ((IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) && find(games, GAMES[size_t(sel)].id))
-            chosen = GAMES[size_t(sel)].id;
-        if (IsKeyPressed(KEY_F) || IsKeyPressed(KEY_F11)) ToggleBorderlessWindowed();
+        const GameInfo& cur = GAMES[size_t(sel)];
+        bool go = pressed(KEY_ENTER) || pressed(KEY_KP_ENTER) || pressed(KEY_SPACE);
+        if (ask) {  // "download it from ...?"
+            if (go || pressed(KEY_Y)) {
+                const GameInfo* g = ask;
+                ask = nullptr, error.clear();
+                downloading = std::string("Downloading ") + g->title + " from " + g->download_from + "...";
+                download = std::async(std::launch::async, [g, data_dir] {
+                    std::string err;
+                    auto found = download_game(*g, data_dir, err);
+                    return std::make_pair(found, err);
+                });
+            } else if (pressed(KEY_ESCAPE) || pressed(KEY_N) || pressed(KEY_BACKSPACE)) {
+                ask = nullptr;
+            }
+        } else if (downloading.empty()) {
+            if (pressed(KEY_LEFT)) sel = (sel + n - 1) % n;
+            if (pressed(KEY_RIGHT)) sel = (sel + 1) % n;
+            if (go && find(games, cur.id)) chosen = cur.id;
+            else if ((go || pressed(KEY_D)) && cur.download_url) ask = &cur;
+        }
+        if (pressed(KEY_F) || pressed(KEY_F11)) ToggleBorderlessWindowed();
 
         BeginDrawing();
         ClearBackground({14, 14, 20, 255});
@@ -134,19 +205,40 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             else DrawRectangleRec(art, {28, 28, 34, 255});
             centred(g.title, card.x + cw / 2, card.y + ch - 66, 34, have ? RAYWHITE : Fade(RAYWHITE, 0.45f));
             if (!have) {
-                std::string ask = std::string("Drop your ") + g.drop + " here";
-                int size = 26;  // smaller if it would not fit the card
-                while (size > 12 && MeasureText(ask.c_str(), size) > cw - 40) size--;
-                centred(ask.c_str(), card.x + cw / 2, art.y + art.height / 2 - 12, size, Fade(RAYWHITE, 0.8f));
+                auto line = [&](const std::string& t, float y, int size, Color c) {
+                    while (size > 12 && MeasureText(t.c_str(), size) > cw - 40) size--;  // smaller if it would not fit
+                    centred(t.c_str(), card.x + cw / 2, y, size, c);
+                };
+                float my = art.y + art.height / 2;
+                if (g.download_url) {
+                    line(std::string("ENTER  download it from ") + g.download_from, my - 40, 28, {255, 214, 96, 255});
+                    line(std::string("or drop your ") + g.drop + " here", my + 10, 22, Fade(RAYWHITE, 0.7f));
+                } else {
+                    line(std::string("Drop your ") + g.drop + " here", my - 12, 26, Fade(RAYWHITE, 0.8f));
+                }
             }
         }
         float ty = y0 + ch + 60;
         centred("LEFT / RIGHT  choose      ENTER  play      F  full screen", w / 2, ty, 26, Fade(RAYWHITE, 0.75f));
-        centred("The original games are not included: drop your own copies onto this window.", w / 2, ty + 44, 22,
-                Fade(RAYWHITE, 0.55f));
-        if (!error.empty()) centred(error.c_str(), w / 2, ty + 88, 22, {255, 110, 90, 255});
+        centred("The original games are not included: download them here, or drop your own copies onto this window.", w / 2,
+                ty + 44, 22, Fade(RAYWHITE, 0.55f));
+        if (!downloading.empty()) centred(downloading.c_str(), w / 2, ty + 88, 22, {255, 214, 96, 255});
+        else if (!error.empty()) centred(error.c_str(), w / 2, ty + 88, 22, {255, 110, 90, 255});
+        if (ask) {  // the question, over everything
+            DrawRectangle(0, 0, int(w), int(h), Fade(BLACK, 0.7f));
+            float bw = std::min(w * 0.9f, 1100.0f), bh = 260, bx = (w - bw) / 2, by = (h - bh) / 2;
+            DrawRectangleRounded({bx, by, bw, bh}, 0.08f, 8, {36, 36, 46, 255});
+            DrawRectangleRoundedLinesEx({bx, by, bw, bh}, 0.08f, 8, 3, {255, 214, 96, 255});
+            std::string q = std::string("Download ") + ask->title + " from " + ask->download_from + "?";
+            centred(q.c_str(), w / 2, by + 40, 34, RAYWHITE);
+            centred(ask->download_what, w / 2, by + 96, 24, Fade(RAYWHITE, 0.7f));
+            centred("A free archive of ZX Spectrum software. The file stays on this computer.", w / 2, by + 132, 22,
+                    Fade(RAYWHITE, 0.55f));
+            centred("ENTER  yes, download          ESC  no", w / 2, by + 190, 28, {255, 214, 96, 255});
+        }
         EndDrawing();
     }
+    if (download.valid()) download.wait();  // the window is closing: let the download finish
     for (auto& [id, t] : covers)
         if (t.id) UnloadTexture(t);
     return chosen;
@@ -156,7 +248,7 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
 
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
-    std::string test_dir, script, want;
+    std::string test_dir, script, want, file;
     if (args.size() >= 2 && args[0] == "--test") {
         test_dir = args[1];
         args.erase(args.begin(), args.begin() + 2);
@@ -164,8 +256,13 @@ int main(int argc, char** argv) {
             want = args[1];
             args.erase(args.begin(), args.begin() + 2);
         }
+        if (args.size() >= 2 && args[0] == "--file") {  // this game file before the usual places
+            file = args[1];
+            args.erase(args.begin(), args.begin() + 2);
+        }
         if (!args.empty()) script = args[0];
         args.clear();
+        if (!file.empty()) args.push_back(file);
     }
     // Inside the .app the assets live in Contents/Resources, in a zip next to the binary;
     // otherwise use the source tree. The games are the user's own copies: a path argument,
@@ -197,7 +294,8 @@ int main(int argc, char** argv) {
         } else if (!games.empty())
             g = &games.front();
         if (g) run_game(*g, assets, test_dir, script);
-        else pick_game(games, data_dir, assets, test_dir);
+        else if (auto id = pick_game(games, data_dir, assets, test_dir, want == "list" ? script : ""))
+            run_game(*find(games, *id), assets, test_dir, "1@shot 1.1@quit");
         CloseWindow();
         return 0;
     }

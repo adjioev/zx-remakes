@@ -34,6 +34,12 @@ void zxc_destroy(zxc_t* zx);
 int zxc_model(const zxc_t* zx);
 bool zxc_load_z80(zxc_t* zx, const uint8_t* data, size_t size);
 
+// Put a .tap image in the tape deck: whatever the program loads through the ROM (LD-BYTES,
+// 0x0556 of the 48K BASIC ROM) comes from it at once, block by block. false: not a .tap.
+bool zxc_insert_tap(zxc_t* zx, const uint8_t* data, size_t size);
+// Bytes of the tape not read yet (0: none inserted, or all read).
+size_t zxc_tape_left(const zxc_t* zx);
+
 // Run one 50 Hz frame (20 ms of emulated time).
 void zxc_run_frame(zxc_t* zx);
 // Turbo: the CPU runs this many times as fast as the rest of the machine (1 = normal, up to 16);
