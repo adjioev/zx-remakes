@@ -1,7 +1,7 @@
 #pragma once
 
-// Ball Breaker in HD, Tron style: the room, bricks and ball drawn in code as violet neon on black
-// glass, from the game's own 3D coordinates; anything else from the game's sprites, tinted.
+// Ball Breaker in HD: Neon / Tron and Classic HD share geometry from the game's own
+// 3D coordinates. Classic uses solid bright materials; Neon uses dark glass and bloom.
 // Effects (the ball rolling, trails, bounces, landings, shards, lights) are presentation only:
 // they read the game, never change it. 16:9:
 // the 256 x 128 playfield fills 1920 x 960, a new status bar takes the 120 px below.
@@ -17,12 +17,14 @@
 #include <vector>
 
 #include <raylib.h>
+#include "ballbreaker_paddle.h"
 
 struct BBObject {
     float sx, sy;      // playfield pixel of the sprite's top left (smoothed: not whole)
     int sprite;        // sprite number
     float x, y, z;     // game 3D coordinates
     int slot;          // 0 ball, 1 bat, 2 missile, 3+ bricks
+    float bat_width = 0;  // slot 1: collision width from 0x8063, not the sprite mask
 };
 
 // What the menus show (the original runs them; the remake draws them).
@@ -46,6 +48,14 @@ struct BBMenu {
     std::vector<Item> items;
 };
 
+// Presentation follows the simulation by one ball step (25 Hz).
+inline constexpr double BB_RENDER_DELAY = 0.04;
+struct BBPaddleHit {
+    uint64_t id = 0;
+    double t = -10;  // simulation time of the confirmed collision
+    float along = 0;  // contact along the paddle, 0..1
+};
+
 struct BBState {
     int level = 0;  // 0-based
     int room = 0;   // 0-6: A-G
@@ -53,11 +63,15 @@ struct BBState {
     bool unlimited_lives = false, unlimited_missiles = false;  // the remake's options
     std::vector<BBObject> objects;
     BBMenu menu;
+    BBPaddleHit paddle_hit;
 };
+
+enum class BBTheme { Neon, ClassicHD };
 
 class BBRenderer {
 public:
     static constexpr int W = 1920, H = 1080, FIELD_H = 960;
+    static constexpr float BALL_RADIUS = BB_BALL_RADIUS;  // playfield units; shared by sphere and paddle contact
     static constexpr float SCALE = 7.5f;  // playfield pixel -> canvas
 
     // fonts_dir: Orbitron.ttf; intro: the title picture (optional)
@@ -66,6 +80,10 @@ public:
     ~BBRenderer();
     BBRenderer(const BBRenderer&) = delete;
     BBRenderer& operator=(const BBRenderer&) = delete;
+
+    BBTheme theme() const { return theme_; }
+    void set_theme(BBTheme theme) { theme_ = theme; }
+    const char* theme_name() const { return classic() ? "Classic HD" : "Neon / Tron"; }
 
     // The game's sprites (60 x 120 bytes from 0xB9D5), once.
     void load_sprites(const uint8_t* data);
@@ -79,6 +97,8 @@ public:
     void debug_dump(const char* dir);
 
 private:
+    BBTheme theme_ = BBTheme::Neon;
+    bool classic() const { return theme_ == BBTheme::ClassicHD; }
     void scene(const BBState&, double t, bool glow_pass);
     void room(int room, double t, bool glow_pass);
     void brick(const BBObject&, double t, bool glow_pass);
@@ -99,7 +119,7 @@ private:
     Texture2D intro_{};
     Texture2D creatures_{};  // 0x11-0x15, a cell each: the sprite's box plus CREATURE_PAD all round
     void floor_marks(double t, bool glow_pass);
-    void update_ball(const BBObject*, const BBObject* bat, double t, float dt);
+    void update_ball(const BBObject*, double t, float dt);
     // light on a point (game coordinates) from the ball and the explosions, 0..
     Color lit(Color base, float x, float y, float z) const;
 
@@ -161,13 +181,13 @@ private:
     std::vector<BatWave> bat_waves_;
     // The bat's box, from its sprite (it changes with the "bat size" bricks): its length along
     // the rail (X, what the ball can hit), its width (Z), its height; where its sprite's box starts.
-    struct BatShape {
-        float dx = 12, dz = 7, h = 12;
-        int left = 0;
-    };
+    using BatShape = BBPaddleShape;
     BatShape bat_shape(int sprite) const;
+    using BatBody = BBPaddleBody;
+    BatBody bat_body(const BBObject&) const;
+    std::vector<const BBObject*> scene_order(const BBState&) const;
     std::vector<uint8_t> sprite_data_;
-    float bat_dx_ = 12;                       // the current bat's length, for where the ball hit
+    uint64_t shown_paddle_hit_ = 0;  // consume each confirmed collision once
     Vector2 bat_edge_a_{}, bat_edge_b_{};     // its striking edge: drawn crisp over the glow
     bool bat_edge_ = false;
 
@@ -177,6 +197,7 @@ private:
     RenderTexture2D glow_{}, half_a_{}, half_b_{};
     Shader blur_{};
     int blur_dir_loc_ = -1;
+    Texture2D classic_sprites_{};  // opaque paper and ink, using the original masks
     Texture2D sprites_{};          // the sprites' solid parts as dark glass (ink darker), for the fill
     // The sprites as vectors (sprite pixels): the silhouette's outlines, smoothed (closed), and
     // the ink strokes inside (open), drawn as crisp neon lines at any size.

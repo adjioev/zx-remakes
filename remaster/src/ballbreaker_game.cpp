@@ -15,6 +15,8 @@ namespace {
 constexpr uint16_t MENU_LOOP = 0x9DA7;    // main menu and the control choice
 constexpr uint16_t PLAY_LOOP = 0x854C;    // sprite compositor, every frame of play
 constexpr uint16_t ENTRY_LOOP = 0xABC0;   // typing a name into the hi-score table (its key loop)
+constexpr uint16_t PADDLE_HIT = 0x8A73;  // collision accepted; outgoing Z direction has been stored
+constexpr uint16_t BAT_CENTRE = 0x8061, BAT_Z = 0x8062, BAT_WIDTH = 0x8063, BALL_X = 0x8064;
 constexpr uint16_t PAGE_LOOP = 0x86A5;    // a page up: hi-scores, instructions (and the name entry)
 constexpr uint64_t LEAVE_FRAMES = 45;     // the menu's wipe after PLAY GAME (the original's, ~0.9 s)
 constexpr uint64_t RECENT = 10;           // frames a sighting counts for
@@ -74,6 +76,14 @@ void BallBreakerView::start(Spectrum& s, const std::string& assets) {
     s.on_exec(PLAY_LOOP, [this](const zxc_regs_t&) { seen_play_ = frame_ + 1; });
     s.on_exec(ENTRY_LOOP, [this](const zxc_regs_t&) { seen_entry_ = frame_ + 1; });
     Spectrum* sp = &s;
+    // Observe the original's confirmed collision; never infer a paddle hit from
+    // a render-frame velocity change (shallow turns and frame rate made that unreliable).
+    s.on_exec(PADDLE_HIT, [this, sp](const zxc_regs_t&) {
+        float width = std::max(1, int(sp->peek(BAT_WIDTH)));
+        float left = float(sp->peek(BAT_CENTRE) - sp->peek(BAT_WIDTH) / 2);
+        paddle_hit_ = {++paddle_hit_id_, double(frame_ + 1) / Spectrum::FRAME_HZ,
+                       std::clamp((sp->peek(BALL_X) - left) / width, 0.0f, 1.0f)};
+    });
     s.on_exec(MAIN_LOOP, [this, sp](const zxc_regs_t&) {
         if (pending_level_ >= 0) {  // the jump (jump_to): the level number, then the level start
             sp->poke(LEVEL, uint8_t(pending_level_));
@@ -110,6 +120,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& assets) {
         sp->poke(PLAY_REASON, 1);
     });
     s.on_exec(LEVEL_START, [this, sp](const zxc_regs_t&) {
+        paddle_hit_ = {};
         if (!remake_ || sp->peek16(SCORE) != 0 || sp->peek(LEVEL) != 0) return;
         sp->poke16(0x80B3, 0x5E96), sp->poke16(0x80B5, 0x5FFC), sp->poke16(0x80B7, 0x6143);
         for (uint16_t a : {0x80AF, 0x80B0, 0x80B1, 0x5B21, 0x5B25, 0x5B29, 0x80C7, 0x80C8, 0x80C9}) sp->poke(a, 0);
@@ -117,6 +128,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& assets) {
         music_restarted_ = true;
     });
     s.on_exec(PLAY_EXIT, [this, sp](const zxc_regs_t&) {
+        paddle_hit_ = {};
         paced_ = false;
         sp->set_turbo(1);
     });
@@ -174,6 +186,12 @@ void BallBreakerView::after_frame(Spectrum& s) {
     }
     frame_++;
     game_t_ = double(frame_) / Spectrum::FRAME_HZ;
+    if (paddle_hit_.id && sounded_paddle_hit_ != paddle_hit_.id &&
+        game_t_ + 1e-8 >= paddle_hit_.t + BB_RENDER_DELAY) {
+        sounded_paddle_hit_ = paddle_hit_.id;
+        float screen_x = 160.0f + s.peek(BALL_X) - s.peek(0x8065);
+        sfx_.push_back({Sfx::BatHit, std::clamp(screen_x / 128.0f - 1, -1.0f, 1.0f) * 0.7f, 0.9f});
+    }
     if (mode_ == Mode::Play) smooth_sample(s), check_cleared();
     else tracks_.clear();
     if (std::getenv("BB_TURBO_LOG"))
@@ -229,10 +247,14 @@ std::string BallBreakerView::help() const {
                        "Space / Ctrl / gamepad A: fire a missile;  Enter / Space: select\n"
                        "Hi-score: type your name, Enter\n") +
            "L  unlimited lives: " + (unlimited_lives_ ? "ON" : "off") + "      K  unlimited missiles: " +
-           (unlimited_missiles_ ? "ON" : "off");
+           (unlimited_missiles_ ? "ON" : "off") + "\nT  theme: " + (hd_ ? hd_->theme_name() : "Neon / Tron");
 }
 
 std::string BallBreakerView::on_key(Spectrum&, int key) {
+    if (key == KEY_T && hd_) {
+        hd_->set_theme(hd_->theme() == BBTheme::Neon ? BBTheme::ClassicHD : BBTheme::Neon);
+        return std::string("THEME: ") + hd_->theme_name();
+    }
     if (key == KEY_L) {
         unlimited_lives_ = !unlimited_lives_;
         return unlimited_lives_ ? "UNLIMITED LIVES: ON" : "UNLIMITED LIVES: OFF";
@@ -246,6 +268,7 @@ std::string BallBreakerView::on_key(Spectrum&, int key) {
 
 BBState BallBreakerView::read_state(const Spectrum& s) const {
     BBState st;
+    st.paddle_hit = paddle_hit_;
     st.level = s.peek(LEVEL) % LEVELS;
     st.room = room_of(st.level);
     st.score = s.peek16(SCORE) * 100;
@@ -257,6 +280,13 @@ BBState BallBreakerView::read_state(const Spectrum& s) const {
     for (uint16_t a = OBJECTS; a + 10 <= end && slot < 200; a += 10, slot++) {
         BBObject o{float(s.peek(uint16_t(a + 1))), float(s.peek(uint16_t(a + 2))), s.peek(uint16_t(a + 3)),
                    float(s.peek(uint16_t(a + 7))), float(s.peek(uint16_t(a + 8))), float(s.peek(uint16_t(a + 9))), slot};
+        if (slot == 1) {
+            // The sprite-sort X is left - 7 (clipped near the end of the rail).
+            // Rendering that coordinate as the physical paddle displaced its hit face.
+            o.x = float(s.peek(BAT_CENTRE) - s.peek(BAT_WIDTH) / 2);
+            o.z = float(s.peek(BAT_Z));
+            o.bat_width = float(s.peek(BAT_WIDTH));
+        }
         if (o.sx == 0) continue;  // a free slot or a brick that is gone
         st.objects.push_back(o);
     }
@@ -351,7 +381,6 @@ void BallBreakerView::draw(const Spectrum& s, bool original, double t) {
 }
 
 namespace {
-constexpr double RENDER_DELAY = 0.04;
 constexpr float TELEPORT = 24;  // playfield pixels: bigger jumps are taken at once
 }  // namespace
 
@@ -409,7 +438,7 @@ void BallBreakerView::smooth_sample(const Spectrum& s) {
             for (int i = 0; i < 5; i++) moved |= v[i] != last.pos[i];
             if (teleport) tr.samples.clear();
             // After a rest, keep a stationary endpoint immediately before movement.
-            else if (moved && t - last.t > RENDER_DELAY + 0.001) {
+            else if (moved && t - last.t > BB_RENDER_DELAY + 0.001) {
                 Sample rest = last;
                 rest.t = t - 1.0 / Spectrum::FRAME_HZ;
                 tr.samples.push_back(rest);
@@ -419,7 +448,7 @@ void BallBreakerView::smooth_sample(const Spectrum& s) {
             Sample sample{t, {v[0], v[1], v[2], v[3], v[4]}};
             tr.samples.push_back(sample);
         }
-        while (tr.samples.size() > 2 && tr.samples[1].t <= t - RENDER_DELAY)
+        while (tr.samples.size() > 2 && tr.samples[1].t <= t - BB_RENDER_DELAY)
             tr.samples.pop_front();
         next[o.slot] = std::move(tr);
     }
@@ -431,7 +460,7 @@ void BallBreakerView::smooth_apply(BBState& st, double t) const {
         auto it = tracks_.find(o.slot);
         if (it == tracks_.end()) continue;
         float v[5];
-        track_pos(it->second, t - RENDER_DELAY, v);
+        track_pos(it->second, t - BB_RENDER_DELAY, v);
         o.sx = v[0], o.sy = v[1], o.x = v[2], o.y = v[3], o.z = v[4];
     }
 }
@@ -471,12 +500,9 @@ void BallBreakerView::sounds(const BBState& before, size_t bursts_before) {
         else {
             int sx = dx > 0 ? 1 : dx < 0 ? -1 : 0, sz = dz > 0 ? 1 : dz < 0 ? -1 : 0;
             bool turned = (sx && heard_.dx && sx != heard_.dx) || (sz && heard_.dz && sz != heard_.dz);
-            if (turned && game_t_ - heard_.hit_t > 0.1) {
+            if (turned && game_t_ - heard_.hit_t > 0.1 && game_t_ - paddle_hit_.t > 0.12) {
                 heard_.hit_t = game_t_;
-                const BBObject* bat = find(latest_, 1);
-                bool off_bat = bat && b->z < 20 && heard_.dz < 0 && sz > 0;  // back from the near edge: the bat
-                if (off_bat) sfx_.push_back({Sfx::BatHit, pan(*b), 0.9f});
-                else if (game_t_ - heard_.brick_t > 0.12) sfx_.push_back({Sfx::Bounce, pan(*b), 0.8f});
+                if (game_t_ - heard_.brick_t > 0.12) sfx_.push_back({Sfx::Bounce, pan(*b), 0.8f});
             }
             if (sx) heard_.dx = sx;
             if (sz) heard_.dz = sz;

@@ -71,6 +71,8 @@ private:
 
     std::unique_ptr<BBRenderer> hd_;
     BBState state_, latest_;
+    BBPaddleHit paddle_hit_;
+    uint64_t paddle_hit_id_ = 0, sounded_paddle_hit_ = 0;
     std::map<int, Track> tracks_;
     std::vector<std::pair<BBObject, int>> bursts_;
     uint64_t passes_ = 0;

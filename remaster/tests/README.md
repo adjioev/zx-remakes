@@ -70,3 +70,39 @@ The old renderer failed these checks after 20 seconds. Oscillator phases now
 wrap each cycle, and modulation time comes from an integer sample counter with
 double-precision time calculations. Note envelopes still use short local times;
 there is no change to the arrangement or gameplay clock.
+
+# Paddle contact
+
+From the repository root, after building `remaster/build` (macOS/raylib):
+
+```sh
+c++ -std=c++20 -Iremaster/src $(pkg-config --cflags raylib) \
+  remaster/tests/paddle_contact.cpp \
+  remaster/build/CMakeFiles/zxremakes.dir/src/{games.cpp,ballbreaker_game.cpp,ballbreaker_hd.cpp,spectrum.cpp,zxcore.c,music_remix.cpp}.o \
+  $(pkg-config --libs raylib) -o /tmp/zx-paddle-contact
+/tmp/zx-paddle-contact 'original/ballbreaker/Ball Breaker (1987)(CRL Group)[128K].z80'
+```
+
+Requires the user's original snapshot and a graphical session (opens a hidden
+raylib window). No game data is bundled. Replays the first serve with a short
+left movement, observes the original collision routine, and checks physical
+paddle coordinates and placement inside the room, exactly one delayed flash/sound, and no
+retrigger on rerenders or theme changes. Also checks three paddle widths at
+rail endpoints, event delivery at 50/60/120/144 Hz, and expiry while HD is hidden.
+The pre-fix renderer failed the geometry and shallow-angle flash checks.
+
+Manual check: play in both themes, including hits near either paddle end and
+while moving the paddle. Confirm the visual contact and sound feel aligned.
+
+Paddle occlusion regression: the same replay checks draw order at 8.66–8.72 s
+in both themes. The old sprite-anchor sort flipped the sphere over the paddle
+end at 8.68 s. Ordering now uses the rendered sphere and paddle bounds, including
+bounce height. Separate cases cover a sphere in front of either visible side,
+a sphere above the paddle, and an absent paddle. Screenshot replay also confirms
+that the end face continues to mask the ball smoothly after contact.
+
+Room-placement regression: on the real contact frame the paddle's play-side
+corner must project to the original sprite X, its face must stay at BAT_Z, and
+its whole base must remain at Z >= 0. Subtracting the ball radius failed all
+three checks. This corrects presentation only; the original collision rule is
+unchanged. Side-collision work is deferred pending the placement playtest.

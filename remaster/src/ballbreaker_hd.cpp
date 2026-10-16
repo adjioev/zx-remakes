@@ -72,7 +72,7 @@ const RoomStyle ROOM_STYLES[7] = {
 // Each room's materials and light, so the 7 look like 7 places (the patterns stay the original's).
 // Surfaces are mid-dark so the ball and the bricks read on any of them.
 enum class Look { Neon, Reactor, Copper, Circuit, Obsidian, Ice, Temple };
-struct Theme {
+struct RoomPalette {
     Look look;
     Color void_fill, ribs;
     Color floor, floor_far, floor_alt;  // near / far edge of the floor, the checker's other squares
@@ -82,7 +82,7 @@ struct Theme {
     Color edge, core, dim;  // the room's edges; patterns and grid (scaled by GRID)
     Color rail, accent;     // the front rail; the theme's own light (door, inlays, nodes)
 };
-const Theme THEMES[7] = {
+const RoomPalette THEMES[7] = {
     // A: neon arena - dark glass, violet and pink edges
     {Look::Neon, {3, 1, 8, 255}, {36, 16, 72, 255}, {16, 8, 34, 255}, {10, 5, 24, 255}, {28, 12, 58, 255},
      {12, 6, 28, 255}, {8, 4, 18, 255}, {10, 5, 22, 255}, {6, 3, 14, 255}, {20, 8, 40, 255}, {26, 10, 52, 255},
@@ -112,7 +112,23 @@ const Theme THEMES[7] = {
      {164, 156, 140, 255}, {124, 118, 106, 255}, {140, 133, 120, 255}, {100, 95, 86, 255}, {118, 110, 96, 255}, {140, 130, 112, 255},
      {255, 215, 120, 255}, {255, 214, 120, 255}, {225, 175, 70, 255}, {255, 230, 160, 255}, {40, 200, 190, 255}},
 };
-const Theme& theme_of(int room) { return THEMES[std::clamp(room, 0, 6)]; }
+const RoomPalette& theme_of(int room) { return THEMES[std::clamp(room, 0, 6)]; }
+
+// Classic uses the Spectrum's bright paper colours with solid shaded faces.
+// Geometry and the seven original room patterns are shared with Neon.
+RoomPalette classic_room(int room) {
+    constexpr Color paper[] = {{242, 210, 70, 255}, {88, 211, 224, 255}, {98, 210, 121, 255},
+                             {222, 126, 213, 255}, {224, 228, 223, 255}, {115, 181, 234, 255},
+                             {237, 210, 129, 255}};
+    Color c = paper[std::clamp(room, 0, 6)];
+    auto shade = [&](float k) { return Color{uint8_t(c.r*k), uint8_t(c.g*k), uint8_t(c.b*k), 255}; };
+    const Color ink{44, 50, 65, 255};
+    return {Look::Neon, {28, 34, 47, 255}, {40, 48, 63, 255},
+            shade(0.74f), shade(0.65f), shade(0.87f),
+            shade(0.88f), c, shade(0.70f), shade(0.82f),
+            shade(0.50f), shade(0.60f), ink, shade(0.38f), shade(0.48f),
+            ink, {255, 244, 191, 255}};
+}
 
 // Game 3D point -> canvas. g_scale / g_off: drawn elsewhere and at another size (the menus'
 // brick thumbnails); the play field is SCALE at 0, 0.
@@ -273,6 +289,7 @@ BBRenderer::~BBRenderer() {
     UnloadRenderTexture(half_b_);
     UnloadShader(blur_);
     if (sprites_.id) UnloadTexture(sprites_);
+    if (classic_sprites_.id) UnloadTexture(classic_sprites_);
     if (intro_.id) UnloadTexture(intro_);
     if (creatures_.id) UnloadTexture(creatures_);
     if (font_big_.texture.id != GetFontDefault().texture.id) UnloadFont(font_big_);
@@ -297,6 +314,13 @@ void BBRenderer::load_sprites(const uint8_t* data) {
     if (sprites_.id) UnloadTexture(sprites_);
     sprites_ = LoadTextureFromImage(img);
     SetTextureFilter(sprites_, TEXTURE_FILTER_BILINEAR);
+    for (int n = 0; n < SPRITES; n++)
+        for (int y = 0; y < SPRITE_H; y++)
+            for (int x = 0; x < SPRITE_W; x++)
+                if (solid(n, x, y)) px[y * img.width + n * SPRITE_W + x] = ink(n, x, y) ? Color{50, 55, 65, 255} : WHITE;
+    if (classic_sprites_.id) UnloadTexture(classic_sprites_);
+    classic_sprites_ = LoadTextureFromImage(img);
+    SetTextureFilter(classic_sprites_, TEXTURE_FILTER_BILINEAR);
     UnloadImage(img);
 
     vec_.assign(SPRITES, {});
@@ -389,7 +413,7 @@ void BBRenderer::load_sprites(const uint8_t* data) {
 }
 
 void BBRenderer::room(int room, double t, bool glow) {
-    const Theme& th = theme_of(room);
+    const RoomPalette th = classic() ? classic_room(room) : theme_of(room);
     // the void around the room, with the ceiling's diagonal ribs
     if (!glow) {
         DrawRectangle(0, 0, W, FIELD_H, th.void_fill);
@@ -401,10 +425,10 @@ void BBRenderer::room(int room, double t, bool glow) {
     }
     Vector2 f0 = P(0, 0, 0), f1 = P(FLOOR_X, 0, 0), f2 = P(FLOOR_X, 0, FLOOR_Z), f3 = P(0, 0, FLOOR_Z);
     Vector2 w1 = P(FLOOR_X, WALL_H, 0), w2 = P(FLOOR_X, WALL_H, FLOOR_Z), w3 = P(0, WALL_H, FLOOR_Z);
-    float pulse = 0.85f + 0.15f * float(std::sin(t * 2.0));
+    float pulse = classic() ? 1.0f : 0.85f + 0.15f * float(std::sin(t * 2.0));
     Color edge_c = scale(th.edge, pulse);                                            // the room's edges
     // patterns, grid (on light stone, dimmed lines would read as dark: there they stay bright, gold)
-    float grid_k = th.look == Look::Temple ? 1.0f : GRID;
+    float grid_k = classic() || th.look == Look::Temple ? 1.0f : GRID;
     Color core = scale(th.core, pulse * grid_k), dim = scale(th.dim, pulse * grid_k);
     if (!glow) {
         quad_grad(f0, f1, f2, f3, th.floor, th.floor_far, th.floor_far, th.floor);           // floor
@@ -579,6 +603,7 @@ void BBRenderer::room(int room, double t, bool glow) {
 }
 
 Color BBRenderer::lit(Color base, float x, float y, float z) const {
+    if (classic()) return base;
     Color out = base;
     auto add_light = [&](float lx, float ly, float lz, float radius, float intensity, Color c) {
         float d = std::sqrt((x - lx) * (x - lx) + (y - ly) * (y - ly) + (z - lz) * (z - lz));
@@ -593,7 +618,7 @@ Color BBRenderer::lit(Color base, float x, float y, float z) const {
 
 void BBRenderer::brick(const BBObject& o, double t, bool glow) {
     Kind k = kind_of(o.sprite);
-    Color c = k.colour;
+    Color c = classic() && k.shape == Shape::Wire ? Color{238, 236, 208, 255} : k.colour;
     if (k.shape == Shape::Slabs)  // these shimmer in the original: pulse
         c = scale(c, 0.75f + 0.25f * float(std::sin(t * 8 + o.x * 0.3)));
     float x0 = float(o.x), y0 = float(o.y), z1 = float(o.z), z0 = z1 - CUBE, x1 = x0 + CUBE, y1 = y0 + CUBE;
@@ -602,12 +627,13 @@ void BBRenderer::brick(const BBObject& o, double t, bool glow) {
     // dark glass faces, a shade per side (top lightest), lit by the ball and explosions
     auto face = [&](float k9, float fx, float fy, float fz) {
         if (glow) return BLACK;
+        if (classic()) k9 = std::max(1.0f, 1.0f + (k9 - 3.2f) * 0.12f);
         Color b{uint8_t(c.r / k9), uint8_t(c.g / k9), uint8_t(c.b / k9), 255};
         return lit(b, fx, fy, fz);
     };
     auto fill = [&](float k9) { return face(k9, xm, ym, zm); };
     auto edges = [&](std::initializer_list<std::pair<Vector2, Vector2>> es, Color col) {
-        for (auto [p, q] : es) line(p, q, w, col);
+        for (auto [p, q] : es) line(p, q, w, classic() ? scale(col, 0.42f) : col);
     };
     // a box between two corners, its three visible faces: front (X = a), right (Z = b), top (Y = top);
     // faces darker at the bottom (contact shadow), a bevel just inside the edges
@@ -617,7 +643,7 @@ void BBRenderer::brick(const BBObject& o, double t, bool glow) {
         if (faces) {
             Color front = face(8, xa, (ya + yb) / 2, (za + zb) / 2), right = face(5.5f, (xa + xb) / 2, (ya + yb) / 2, za);
             Color top = face(3.2f, (xa + xb) / 2, yb, (za + zb) / 2);
-            Color fb = scale(front, 0.5f), rb = scale(right, 0.5f);
+            Color fb = scale(front, classic() ? 0.88f : 0.5f), rb = scale(right, classic() ? 0.88f : 0.5f);
             quad_grad(a, b, cc, d, fb, fb, front, front);
             quad_grad(b, e, f, cc, rb, rb, right, right);
             quad(d, cc, f, g, top);
@@ -631,7 +657,7 @@ void BBRenderer::brick(const BBObject& o, double t, bool glow) {
                                     {ta, tb}, {tb, tc}, {tc, td}, {td, ta}})
                     line(p, q, 1.2f, bev);
                 // a glassy reflection across the front face
-                line(P(xa, ya + (yb - ya) * 0.25f, zb - 1), P(xa, ya + (yb - ya) * 0.85f, za + (zb - za) * 0.35f), 2,
+                if (!classic()) line(P(xa, ya + (yb - ya) * 0.25f, zb - 1), P(xa, ya + (yb - ya) * 0.85f, za + (zb - za) * 0.35f), 2,
                      Fade(WHITE, 0.07f));
             }
         }
@@ -655,7 +681,22 @@ void BBRenderer::brick(const BBObject& o, double t, bool glow) {
         box(x0, x1, y0, y0 + 4, z0, z1, c);
         box(x0, x1, y0 + 7, y0 + 11, z0, z1, c);
         break;
-    case Shape::Wire: box(x0, x1, y0, y1, z0, z1, c, false); break;
+    case Shape::Wire: {
+        box(x0, x1, y0, y1, z0, z1, c, classic());
+        if (classic() && !glow) {
+            // A solid size-bonus block: arrows follow each face's projection,
+            // so the symbol stays legible in play and in instruction thumbnails.
+            const Color ink{42, 57, 72, 255};
+            auto arrow = [&](auto at) {
+                line(at(3.5f, 6), at(8.5f, 6), 0.45f * g_scale, ink);
+                tri(at(2.3f, 6), at(4.5f, 8), at(4.5f, 4), ink);
+                tri(at(9.7f, 6), at(7.5f, 4), at(7.5f, 8), ink);
+            };
+            arrow([&](float u, float v) { return P(x0, y0 + v, z1 - u); });
+            arrow([&](float u, float v) { return P(x0 + u, y0 + v, z0); });
+        }
+        break;
+    }
     case Shape::Pyramid: {
         Vector2 a = P(x0, y0, z1), b = P(x0, y0, z0), e = P(x1, y0, z0), apex = P(xm, y1, zm);
         tri(a, b, apex, fill(7));
@@ -721,54 +762,42 @@ void BBRenderer::brick(const BBObject& o, double t, bool glow) {
 }
 
 BBRenderer::BatShape BBRenderer::bat_shape(int sprite) const {
-    BatShape b;
-    if (sprite < 0 || sprite >= SPRITES || sprite_data_.empty()) return b;
-    const uint8_t* d = sprite_data_.data() + sprite * SPRITE_BYTES;
-    auto solid = [&](int x, int y) { return !(d[y * 6 + 3 + x / 8] & (0x80 >> (x % 8))); };
-    int left = SPRITE_W, right = -1, bottom = -1;
-    for (int y = 0; y < SPRITE_H; y++)
-        for (int x = 0; x < SPRITE_W; x++)
-            if (solid(x, y)) left = std::min(left, x), right = std::max(right, x), bottom = std::max(bottom, y);
-    if (right < 0) return b;
-    // an oblique box: its front face is the solid run on the bottom row (Z width), the rest of the
-    // width is its depth along X; the front face's height is from the bottom to where the left
-    // column starts
-    int run = 0;
-    while (left + run <= right && solid(left + run, bottom)) run++;
-    int top_left = bottom;
-    while (top_left > 0 && solid(left, top_left - 1)) top_left--;
-    b.dz = float(run);
-    b.dx = float(right - left + 1 - run);
-    b.h = float(bottom - top_left);
-    b.left = left;
-    return b;
+    return bb_paddle_shape(sprite < 0 || sprite >= SPRITES || sprite_data_.empty()
+                           ? nullptr : sprite_data_.data() + sprite * SPRITE_BYTES);
+}
+
+BBRenderer::BatBody BBRenderer::bat_body(const BBObject& o) const {
+    const BatShape shape = bat_shape(o.sprite);
+    return bb_paddle_body(o.x, o.bat_width > 0 ? o.bat_width : shape.dx, o.z, shape);
 }
 
 void BBRenderer::bat_lane(const BBObject& o, double /*t*/, bool glow) {
     // A little light spills from the striking edge; quiet wall ticks show alignment.
     // Keep these cues out of the bloom pass so they stay below the ball and bat.
     if (glow) return;
-    BatShape b = bat_shape(o.sprite);
-    float x0 = o.x, x1 = o.x + b.dx;
-    float z1 = 160 + o.x - (o.sx + b.left);
+    const BatBody b = bat_body(o);
+    float x0 = b.x0, x1 = b.x1, z1 = b.z1;
     if (z1 >= FLOOR_Z) return;
-    const Color ice{150, 230, 255, 255};
+    const Color light = classic() ? Color{255, 250, 225, 255} : Color{150, 230, 255, 255};
     float end = z1 + (FLOOR_Z - z1) / 3.0f;
-    Color near = Fade(ice, 0.14f), far = Fade(ice, 0.0f);
+    Color near = Fade(light, classic() ? 0.28f : 0.14f), far = Fade(light, 0.0f);
     quad_grad(P(x0, 0, z1), P(x1, 0, z1), P(x1, 0, end), P(x0, 0, end), near, near, far, far);
     // Static, separate marks at the wall's foot, with no connecting line.
+    const Color tick = classic() ? Color{42, 57, 72, 180} : Fade(light, 0.32f);
     for (float x : {x0, x1})
-        line(P(x, 0, FLOOR_Z), P(x, 3, FLOOR_Z), 1.2f, Fade(ice, 0.32f));
+        line(P(x, 0, FLOOR_Z), P(x, 3, FLOOR_Z), classic() ? 2.0f : 1.2f, tick);
 }
 
 void BBRenderer::bat(const BBObject& o, double t, bool glow) {
     // a dark metal block with bevelled edges, light slits, and a bright cold-blue striking edge
-    // on the side that faces the play (Z+): exactly the sprite's box, so what is seen is what hits
-    BatShape b = bat_shape(o.sprite);
-    bat_dx_ = b.dx;
-    float x0 = o.x, x1 = o.x + b.dx, y0 = 0, y1 = b.h;
-    float z1 = 160 + o.x - (o.sx + b.left), z0 = z1 - b.dz;  // its front-left edge is the sprite's left
-    const Color body{34, 38, 54, 255}, side{26, 30, 44, 255}, top{58, 66, 88, 255}, steel{120, 140, 175, 255};
+    // on the side that faces play (Z+), positioned from the original collision coordinates
+    const BatBody b = bat_body(o);
+    float x0 = b.x0, x1 = b.x1, y0 = 0, y1 = b.height;
+    float z1 = b.z1, z0 = b.z0;
+    const Color body = classic() ? Color{192, 201, 213, 255} : Color{34, 38, 54, 255};
+    const Color side = classic() ? Color{135, 149, 170, 255} : Color{26, 30, 44, 255};
+    const Color top = classic() ? Color{246, 247, 233, 255} : Color{58, 66, 88, 255};
+    const Color steel = classic() ? Color{63, 77, 98, 255} : Color{120, 140, 175, 255};
     const Color ice{150, 230, 255, 255};
     float w = glow ? 4 : 2;
     if (!glow) {  // contact shadow
@@ -850,9 +879,9 @@ void rotate(float* m, V3 axis, float angle) {
 
 void BBRenderer::ball(const BBObject& o, double t, bool glow) {
     Vector2 c{(o.sx + 12) * SCALE, (o.sy + 10) * SCALE};
-    float r = 6 * SCALE;
+    float r = BALL_RADIUS * SCALE;
     // the trail, short and narrowing, drawn behind the ball
-    const float TRAIL = 0.16f;
+    const float TRAIL = classic() ? 0.055f : 0.16f;
     for (size_t i = 1; i < ball_.trail.size(); i++) {
         float a0 = float((t - ball_.trail[i - 1].t) / TRAIL), a1 = float((t - ball_.trail[i].t) / TRAIL);
         if (a0 >= 1) continue;
@@ -868,6 +897,14 @@ void BBRenderer::ball(const BBObject& o, double t, bool glow) {
     if (glow) {
         DrawEllipse(int(c.x), int(c.y), rx * 0.62f, ry * 0.62f, WHITE);
         DrawEllipse(int(c.x), int(c.y), rx, ry, Fade(Color{170, 110, 255, 255}, 0.6f));
+    } else if (classic()) {
+        DrawEllipse(int(c.x), int(c.y), rx, ry, Color{69, 79, 96, 255});
+        for (int i = 0; i < 12; i++) {
+            float a = float(i) / 11;
+            float radius = 0.96f - a * 0.65f;
+            Color shade{uint8_t(145 + 105*a), uint8_t(155 + 98*a), uint8_t(168 + 87*a), 255};
+            DrawEllipse(int(c.x - rx*a*0.22f), int(c.y - ry*a*0.25f), rx*radius, ry*radius, shade);
+        }
     } else {
         // dark glass shell, a white-hot core
         DrawEllipse(int(c.x), int(c.y), rx, ry, Color{26, 10, 52, 255});
@@ -889,6 +926,7 @@ void BBRenderer::ball(const BBObject& o, double t, bool glow) {
                 float f = (front + prev.z) / 2;
                 float alpha = f > 0 ? 0.35f + 0.65f * f : 0.12f;  // the back half faint, through the glass
                 Color lc = Fade(f > 0 ? Color{230, 200, 255, 255} : Color{150, 90, 255, 255}, alpha * (glow ? 0.7f : 1));
+                if (classic()) lc = Fade(Color{65, 83, 109, 255}, f > 0 ? 0.65f : 0.0f);
                 line({c.x + prev.x * rx * 0.97f, c.y - prev.y * ry * 0.97f}, {c.x + cur.x * rx * 0.97f, c.y - cur.y * ry * 0.97f},
                      glow ? 4 : (f > 0 ? 2.2f : 1.2f), lc);
             }
@@ -901,7 +939,7 @@ void BBRenderer::ball(const BBObject& o, double t, bool glow) {
     for (float lat : {-0.7f, 0.0f, 0.7f})
         curve([lat](float th) { return V3{std::cos(lat) * std::cos(th), std::sin(lat), std::cos(lat) * std::sin(th)}; });
     // a thin coloured rim and a fixed highlight: the light stays, the pattern turns
-    DrawRing(c, std::min(rx, ry) - 2, std::max(rx, ry) + (glow ? 3 : 0.5f), 0, 360, 48, Color{190, 120, 255, 255});
+    DrawRing(c, std::min(rx, ry) - 2, std::max(rx, ry) + (glow ? 3 : 0.5f), 0, 360, 48, classic() ? Color{63, 77, 98, 255} : Color{190, 120, 255, 255});
     if (!glow) DrawCircleV({c.x - rx * 0.38f, c.y - ry * 0.4f}, r * 0.16f, Fade(WHITE, 0.9f));
 }
 
@@ -911,6 +949,10 @@ void BBRenderer::sprite(const BBObject& o, Color tint, double t, bool glow) {
 
 void BBRenderer::sprite_at(int n, Rectangle dst, Color tint, double t, bool glow) {
     if (creature(n, dst, tint, t, glow)) return;
+    if (classic() && classic_sprites_.id && n >= 0 && n < SPRITES) {
+        if (!glow) DrawTexturePro(classic_sprites_, {float(n * SPRITE_W), 0, float(SPRITE_W), float(SPRITE_H)}, dst, {0, 0}, 0, tint);
+        return;
+    }
     // anything else: dark glass inside, the silhouette a crisp neon line, the ink strokes finer
     if (!sprites_.id || n < 0 || n >= SPRITES || size_t(n) >= vec_.size()) return;
     float k = dst.width / SPRITE_W;
@@ -939,7 +981,7 @@ bool BBRenderer::creature(int n, Rectangle dst, Color tint, double t, bool glow)
     // opening and closing as the game's frames do; 0x15: a spinning top.
     if (n < 0x11 || n > 0x15) return false;
     const float k = dst.width / SPRITE_W;
-    if (creatures_.id) {  // the painted frames, their glow painted in (none added in the glow pass)
+    if (creatures_.id && !classic()) {  // the painted frames, their glow painted in (none added in the glow pass)
         if (!glow) {
             const float cw = creatures_.width / 5.0f, pad = CREATURE_PAD * k;
             DrawTexturePro(creatures_, {cw * float(n - 0x11), 0, cw, float(creatures_.height)},
@@ -948,7 +990,8 @@ bool BBRenderer::creature(int n, Rectangle dst, Color tint, double t, bool glow)
         return true;
     }
     auto at = [&](float x, float y) { return Vector2{dst.x + x * k, dst.y + y * k}; };
-    const Color fill = glow ? BLANK : Color{uint8_t(tint.r * 0.10f), uint8_t(tint.g * 0.12f), uint8_t(tint.b * 0.12f), 235};
+    const Color fill = glow ? BLANK : classic() ? scale(tint, 0.85f) : Color{uint8_t(tint.r * 0.10f), uint8_t(tint.g * 0.12f), uint8_t(tint.b * 0.12f), 235};
+    if (classic()) tint = scale(tint, 0.30f);
     const float w = glow ? k * 1.0f : std::max(2.0f, k * 0.40f), wd = glow ? k * 0.6f : std::max(1.4f, k * 0.24f);
     const Color fine = glow ? scale(tint, 0.6f) : add(scale(tint, 0.75f), WHITE, 0.1f);
     std::vector<Vector2> pts;
@@ -1062,6 +1105,15 @@ void BBRenderer::burst(const BBObject& o, int points) {
 }
 
 void BBRenderer::floor_marks(double t, bool glow) {
+    if (classic()) {
+        if (ball_.have && ball_.h > -2 && !glow) {
+            float h = std::max(0.0f, ball_.h);
+            float spread = 1 + h / 65;
+            DrawEllipse(int(ball_.floor.x), int(ball_.floor.y), 6*SCALE*spread, 2.5f*SCALE*spread,
+                        Fade(BLACK, 0.30f * std::clamp(1-h/90, 0.3f, 1.0f)));
+        }
+        return;
+    }
     // where the ball is over the floor (in this view its height is hard to judge): a soft shadow
     // that spreads and fades as it rises, a faint glow, and a crisp ring right under it that keeps
     // its size and brightness at any height. Only where it is now: no prediction.
@@ -1113,7 +1165,7 @@ void BBRenderer::effects(double, bool glow) {
             float rr = s * (i == 1 ? 0.6f : 1.0f);
             p[i] = {sh.p.x + std::cos(ang) * rr, sh.p.y + std::sin(ang) * rr};
         }
-        if (!glow) tri(p[0], p[1], p[2], Fade(scale(sh.c, 0.25f), a));
+        if (!glow) tri(p[0], p[1], p[2], Fade(scale(sh.c, classic() ? 0.85f : 0.25f), a));
         for (int i = 0; i < 3; i++) line(p[i], p[(i + 1) % 3], glow ? 3.5f : 2, Fade(sh.c, a));
     }
     for (const Spark& sp : sparks_) {
@@ -1132,6 +1184,42 @@ void BBRenderer::effects(double, bool glow) {
             int fs = 56;
             DrawText(txt.c_str(), int(u.p.x - MeasureText(txt.c_str(), fs) / 2), int(u.p.y - u.life * 120), fs, Fade(WHITE, a));
         }
+}
+
+std::vector<const BBObject*> BBRenderer::scene_order(const BBState& s) const {
+    // painter's order, as the game sorts: far (large X) first, then left (large Z), low first
+    std::vector<const BBObject*> order;
+    for (const auto& o : s.objects) order.push_back(&o);
+    std::stable_sort(order.begin(), order.end(), [](const BBObject* a, const BBObject* b) {
+        if (a->x != b->x) return a->x > b->x;
+        if (a->z != b->z) return a->z > b->z;
+        return a->y < b->y;
+    });
+    auto ball_it = std::find_if(order.begin(), order.end(), [](auto o) { return o->slot == 0; });
+    auto bat_it = std::find_if(order.begin(), order.end(), [](auto o) { return o->slot == 1; });
+    if (ball_it != order.end() && bat_it != order.end()) {
+        const BBObject* sphere = *ball_it;
+        const BBObject* paddle = *bat_it;
+        const auto body = bat_body(*paddle);
+        // Ball object coordinates are sprite anchors; the paddle uses physical bounds.
+        // Recover the rendered centre, including the bounce height encoded in sy.
+        const float x = sphere->x + 5;
+        const float z = 160 + x - (sphere->sx + 12);
+        const float y = 118 - x / 2 - (sphere->sy + 10);
+        // Keep the sphere behind the solid paddle until it clears a visible face.
+        // Centre-only ordering lets a still-overlapping sphere pop over the end.
+        const bool in_front = x + BALL_RADIUS <= body.x0 ||
+                              z + BALL_RADIUS <= body.z0 ||
+                              y - BALL_RADIUS >= body.height;
+        if ((ball_it > bat_it) != in_front) {
+            // Correct only this pair, outside the comparator: a pair-specific
+            // comparison inside stable_sort would not be a strict weak ordering.
+            order.erase(ball_it);
+            bat_it = std::find(order.begin(), order.end(), paddle);
+            order.insert(in_front ? bat_it + 1 : bat_it, sphere);
+        }
+    }
+    return order;
 }
 
 void BBRenderer::scene(const BBState& s, double t, bool glow) {
@@ -1158,14 +1246,7 @@ void BBRenderer::scene(const BBState& s, double t, bool glow) {
     floor_marks(t, glow);
     for (const auto& o : s.objects)
         if (o.slot == 1) bat_lane(o, t, glow);
-    // painter's order, as the game sorts: far (large X) first, then left (large Z), low first
-    std::vector<const BBObject*> order;
-    for (const auto& o : s.objects) order.push_back(&o);
-    std::stable_sort(order.begin(), order.end(), [](const BBObject* a, const BBObject* b) {
-        if (a->x != b->x) return a->x > b->x;
-        if (a->z != b->z) return a->z > b->z;
-        return a->y < b->y;
-    });
+    const auto order = scene_order(s);
     for (const BBObject* o : order) {
         if (o->slot == 0) ball(*o, t, glow);
         else if (o->slot >= 3 && o->sprite >= 0x19 && o->sprite <= 0x1f) continue;  // exploding: the burst shows it
@@ -1181,7 +1262,7 @@ void BBRenderer::scene(const BBState& s, double t, bool glow) {
     if (s.menu.screen == Sc::LevelCard) level_card(s, t, glow);
 }
 
-void BBRenderer::update_ball(const BBObject* b, const BBObject* bat, double t, float dt) {
+void BBRenderer::update_ball(const BBObject* b, double t, float dt) {
     if (!b) {
         ball_.have = false;
         ball_.trail.clear();
@@ -1220,10 +1301,6 @@ void BBRenderer::update_ball(const BBObject* b, const BBObject* bat, double t, f
                     sparks_.push_back({c, {sx * sp, sy * sp}, 0, 0.16f + 0.06f * u(rng_), i < 3 ? WHITE : Color{200, 150, 255, 255}});
                 }
                 flashes_.push_back({c, 70, 0, 0.1f, Color{220, 180, 255, 255}});
-                if (bat) {  // off the bat: a wave along it from where it hit
-                    float along = (b->x + 6 - bat->x) / std::max(1.0f, bat_dx_);
-                    if (along > -0.6f && along < 1.6f && b->z < 30) bat_waves_.push_back({std::clamp(along, 0.0f, 1.0f), 0});
-                }
             }
             ball_.vx += (nvx - ball_.vx) * 0.4f, ball_.vz += (nvz - ball_.vz) * 0.4f;
             // landing: squash and a ring on the floor
@@ -1274,7 +1351,8 @@ void BBRenderer::prepare(const BBState& s, double t) {
             UnloadRenderTexture(rt);
         }
     }
-    float dt = last_t_ < 0 ? 0 : float(std::clamp(t - last_t_, 0.0, 0.1));
+    const float elapsed = last_t_ < 0 ? 0 : float(std::max(0.0, t - last_t_));
+    float dt = std::min(elapsed, 0.1f);
     last_t_ = t;
     for (Shard& sh : shards_) {
         sh.life += dt;
@@ -1287,7 +1365,7 @@ void BBRenderer::prepare(const BBState& s, double t) {
     for (FloorRing& rg : rings_) rg.life += dt;
     for (Light& l : lights_) l.life += dt;
     for (Popup& u : popups_) u.life += dt;
-    for (BatWave& wv : bat_waves_) wv.life += dt;
+    for (BatWave& wv : bat_waves_) wv.life += elapsed;  // expire even while the original view was shown
     std::erase_if(shards_, [](const Shard& x) { return x.life >= x.max; });
     std::erase_if(sparks_, [](const Spark& x) { return x.life >= x.max; });
     std::erase_if(flashes_, [](const Flash& x) { return x.life >= x.max; });
@@ -1295,12 +1373,22 @@ void BBRenderer::prepare(const BBState& s, double t) {
     std::erase_if(lights_, [](const Light& x) { return x.life >= x.max; });
     std::erase_if(popups_, [](const Popup& x) { return x.life >= 1.1f; });
     std::erase_if(bat_waves_, [](const BatWave& x) { return x.life >= 0.35f; });
-    const BBObject *b = nullptr, *bat = nullptr;
-    for (const auto& o : s.objects) {
-        if (o.slot == 0) b = &o;
-        if (o.slot == 1) bat = &o;
+    const BBObject* b = nullptr;
+    for (const auto& o : s.objects) if (o.slot == 0) b = &o;
+    const auto& hit = s.paddle_hit;
+    if (!hit.id) bat_waves_.clear();  // level / life transition
+    if (hit.id && hit.id != shown_paddle_hit_ && t + 1e-8 >= hit.t + BB_RENDER_DELAY) {
+        shown_paddle_hit_ = hit.id;
+        float age = float(std::max(0.0, t - hit.t - BB_RENDER_DELAY));
+        // Don't replay an old collision after returning from the original view.
+        if (b && age < 0.35f) bat_waves_.push_back({hit.along, age});
     }
-    update_ball(b, bat, t, dt);
+    // Confirmed paddle contacts have their own effect; the velocity heuristic is
+    // only for other bounces, and must not add a second flash as the ball leaves.
+    if (hit.id && t >= hit.t && t < hit.t + BB_RENDER_DELAY + 0.15) ball_.bounce_t = t;
+    update_ball(b, t, dt);
+
+    if (classic()) return;  // solid materials need no bloom pass
 
     BeginTextureMode(glow_);
     ClearBackground(BLACK);
@@ -1337,28 +1425,31 @@ void BBRenderer::debug_dump(const char* dir) {
 }
 
 void BBRenderer::status_bar(const BBState& s) {
-    DrawRectangle(0, FIELD_H, W, H - FIELD_H, add(theme_of(s.room).void_fill, theme_of(s.room).dim, 0.05f));
-    DrawLineEx({0, float(FIELD_H) + 2}, {float(W), float(FIELD_H) + 2}, 3, theme_of(s.room).edge);
+    const RoomPalette th = classic() ? classic_room(s.room) : theme_of(s.room);
+    const Color label = classic() ? Color{25, 45, 60, 255} : RAYWHITE;
+    DrawRectangle(0, FIELD_H, W, H - FIELD_H, classic() ? Color{91, 211, 224, 255} : add(th.void_fill, th.dim, 0.05f));
+    DrawLineEx({0, float(FIELD_H) + 2}, {float(W), float(FIELD_H) + 2}, 3, th.edge);
     char buf[64];
     std::snprintf(buf, sizeof buf, "SCORE  %07d", s.score);
-    DrawText(buf, 60, FIELD_H + 36, 52, RAYWHITE);
+    DrawText(buf, 60, FIELD_H + 36, 52, label);
     std::snprintf(buf, sizeof buf, "SCREEN  %d", s.level + 1);
-    const Theme& th = theme_of(s.room);
-    DrawText(buf, 640, FIELD_H + 36, 52, add(scale(th.edge, 0.8f), WHITE, 0.15f));
-    DrawText("LIVES", 1020, FIELD_H + 36, 52, RAYWHITE);
+    DrawText(buf, 640, FIELD_H + 36, 52, classic() ? label : add(scale(th.edge, 0.8f), WHITE, 0.15f));
+    DrawText("LIVES", 1020, FIELD_H + 36, 52, label);
     for (int i = 0; i < std::min(s.lives, 9); i++) DrawCircle(1220 + i * 56, FIELD_H + 62, 18, th.rail);
     if (s.unlimited_lives) DrawText("UNLIMITED", 1220, FIELD_H + 88, 22, Color{200, 160, 255, 255});
     if (s.unlimited_missiles) DrawText("UNLIMITED", 1500, FIELD_H + 88, 22, Color{200, 160, 255, 255});
     std::snprintf(buf, sizeof buf, "MISSILES  %02d", s.missiles);
-    DrawText(buf, 1500, FIELD_H + 36, 52, RAYWHITE);
+    DrawText(buf, 1500, FIELD_H + 36, 52, label);
 }
 
 void BBRenderer::draw(const BBState& s, double t) {
     bat_edge_ = false;
     scene(s, t, false);
-    BeginBlendMode(BLEND_ADDITIVE);
-    DrawTexturePro(half_a_.texture, {0, 0, float(W / 4), -float(H / 4)}, {0, 0, float(W), float(H)}, {0, 0}, 0, WHITE);
-    EndBlendMode();
+    if (!classic()) {
+        BeginBlendMode(BLEND_ADDITIVE);
+        DrawTexturePro(half_a_.texture, {0, 0, float(W / 4), -float(H / 4)}, {0, 0, float(W), float(H)}, {0, 0}, 0, WHITE);
+        EndBlendMode();
+    }
     if (bat_edge_) line(bat_edge_a_, bat_edge_b_, 2.5f, Color{235, 250, 255, 255});  // crisp: the edge you aim with
     if (s.menu.screen == BBMenu::Screen::None || (s.menu.screen == BBMenu::Screen::LevelCard && s.menu.leave >= 1)) status_bar(s);
 }
