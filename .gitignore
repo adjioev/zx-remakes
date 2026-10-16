@@ -8,3 +8,8 @@ remaster/build*/
 remaster/assets/*/raw/
 remaster/assets/*/guides/
 remaster/.cache/
+
+# personal working notes, kept local
+CLAUDE.md
+notes/
+remaster/notes-task.md
