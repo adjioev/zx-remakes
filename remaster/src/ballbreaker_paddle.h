@@ -6,7 +6,7 @@
 
 // Paddle geometry decoded from the original sprite mask.
 inline constexpr float BB_BALL_RADIUS = 6;
-inline constexpr int BB_ROOM_WIDTH = 92;
+inline constexpr int BB_ROOM_WIDTH = 96;
 inline int bb_even_paddle_inset(int width) { return std::min(3, std::max(0, width / 2)); }
 // BB1's painted paddle omits three units at its left sprite edge. Constrain
 // the physical body, not the sprite anchor, to the room's playable rail.
@@ -19,6 +19,17 @@ inline int bb_even_paddle_centre(int centre, int width) {
 }
 inline float bb_even_paddle_left(int centre, int width) {
     return float(centre - width / 2 - bb_even_paddle_inset(width));
+}
+// Original movement spans the native 96-unit rail. Its painted sprite has
+// an asymmetric inset; map that shorter body across the whole HD rail without
+// changing the emulated coordinates or the original collision routine.
+inline float bb_original_paddle_left(float native_left, int width) {
+    const float inset = bb_even_paddle_inset(width);
+    const float travel = std::max(1, BB_ROOM_WIDTH - width);
+    // Native two-unit steps can end on either parity (especially after O).
+    // Both of the terminal positions at each end must reach the same HD wall.
+    const float run = std::max(1.0f, travel - 2);
+    return std::clamp((native_left - 1) / run, 0.0f, 1.0f) * (travel + inset) - inset;
 }
 struct BBPaddleShape { float dx = 12, dz = 7, h = 12; int left = 0; };
 inline BBPaddleShape bb_paddle_shape(const uint8_t* mask) {

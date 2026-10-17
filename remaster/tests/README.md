@@ -500,3 +500,20 @@ mouse replays reach native centres 89 and 6 repeatedly with zero changed tune
 bytes. Both-theme contacts, 140 rail cases, 684 collision cases, 14 moving-paddle
 episodes and the quantitative smoothness replay pass. Human listening remains
 the final check.
+
+## Full paddle travel (2026-10-17)
+
+`paddle_travel.cpp` holds left/right through the real keyboard and mouse paths
+in both speed modes, then checks the settled presentation at each corner. It
+also checks that the music bytes remain unchanged after travelling both rails.
+The previous commit fails four of the eight endpoint checks: Even stops at X=92
+although the brick-aligned HD wall is at X=96, and Original leaves X=0..3 empty.
+The fixed version reaches 0 and 96 in both modes, including switching to
+Original from an odd-coordinate Even endpoint. Original maps its shorter
+painted paddle across the native travel range without writing game RAM;
+Even uses the same room width for its physical collision body and rail clamp.
+
+Compile like `paddle_music.cpp`, linking the game/view/renderer/emulator objects,
+and run with `ZXREMAKES_TEST=1` and the BB1 128K snapshot path. The sustained
+travel test supplements `paddle_bounds.cpp`, whose injected positions alone
+cannot prove that normal input can reach a corner.

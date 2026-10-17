@@ -14,7 +14,7 @@ constexpr int SPRITES = 60, SPRITE_W = 24, SPRITE_H = 20, SPRITE_BYTES = 120;
 constexpr float CUBE = 12;
 constexpr float CREATURE_PAD = 3;  // sprite pixels around each painted creature frame (tools/bb_creatures.py)
 constexpr float WALL_H = 64, LIP = 8;
-constexpr float ROOM_X = BB_ROOM_WIDTH, ROOM_Z = 148;  // the original's room: back wall at X = 92, left wall at Z = 148
+constexpr float ROOM_X = BB_ROOM_WIDTH, ROOM_Z = 148;  // HD room encloses the full 8 x 12 brick columns; left wall at Z = 148
 // this level's: some levels have bricks set into a wall (the original's flat sprites just cover
 // it); the walls move out to them, so they stand against the wall (BBRenderer::prepare)
 float FLOOR_X = ROOM_X, FLOOR_Z = ROOM_Z;
@@ -450,7 +450,7 @@ void BBRenderer::room(int room, double t, bool glow) {
     Color core = scale(th.core, pulse * grid_k), dim = scale(th.dim, pulse * grid_k);
     if (!glow) {
         quad_grad(f0, f1, f2, f3, th.floor, th.floor_far, th.floor_far, th.floor);           // floor
-        quad_grad(f1, w1, w2, f2, th.back_low, th.back_high, th.back_high, th.back_low);     // back wall (X = 92)
+        quad_grad(f1, w1, w2, f2, th.back_low, th.back_high, th.back_high, th.back_low);     // back wall
         quad_grad(f2, w2, w3, f3, th.left_low, th.left_high, th.left_high, th.left_low);     // left wall (Z = 148)
         // the lip: front face (X = 0) and right face (Z = 0), below the floor
         Vector2 d{0, LIP * SCALE};

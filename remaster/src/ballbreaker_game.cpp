@@ -271,7 +271,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
         if(!original_speed_ && !sp->peek(0x809a) && sp->peek(0x8083)<=1)modern_last_ball_tick_=sp->video_ticks();
         if (preview_enabled_) {
             if (original_speed_) preview_.microstep(*sp);
-            contact_motion_.observe(*sp, false, !original_speed_);
+            contact_motion_.observe(*sp, false, !original_speed_, g_.paddle_hit == 0x8a73);
         }
     });
     if (g_.paddle_hit == 0x8a73) {
@@ -294,7 +294,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
         });
         s.on_exec(0x8a0a, [this, sp](const zxc_regs_t& r) {
             if (!original_speed_) modern_step(*sp, r);
-            else if (preview_enabled_) contact_motion_.observe(*sp);
+            else if (preview_enabled_) contact_motion_.observe(*sp, false, false, true);
         });
     }
     // option U (a cheat): the bat keeps up with the mouse. Before the game's own step (2 a pass, after
@@ -352,7 +352,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
                                   std::max(1.0f, width - (g_.paddle_hit == 0x8a73 ? 3 : 0)), 0.0f, 1.0f)};
         if (preview_enabled_) {
             if (original_speed_) preview_.contact(paddle_hit_.t, sp->peek(BALL_X), sp->peek(BAT_Z));
-            contact_motion_.observe(*sp, true, !original_speed_);
+            contact_motion_.observe(*sp, true, !original_speed_, g_.paddle_hit == 0x8a73);
         }
     });
     // a creature that lands on the bat eats it a few pixels a pass (0xAC50); the bat gone, the
@@ -712,10 +712,12 @@ BBState BallBreakerView::read_state(const Spectrum& s) const {
             o.x = float(s.peek(BAT_CENTRE) - s.peek(BAT_WIDTH) / 2);
             if(!original_speed_ && g_.paddle_hit==0x8a73)
                 o.x=bb_even_paddle_left(s.peek(BAT_CENTRE),s.peek(BAT_WIDTH));
+            else if(g_.paddle_hit==0x8a73)
+                o.x=bb_original_paddle_left(o.x,s.peek(BAT_WIDTH));
             o.z = float(s.peek(BAT_Z));
             o.bat_width = float(s.peek(BAT_WIDTH));
-            o.bat_inset = g_.paddle_hit == 0x8a73 ? (original_speed_ ? 3 : bb_even_paddle_inset(int(o.bat_width))) : 0;
-            if(!original_speed_ && g_.paddle_hit==0x8a73) {
+            o.bat_inset = g_.paddle_hit == 0x8a73 ? bb_even_paddle_inset(int(o.bat_width)) : 0;
+            if(g_.paddle_hit==0x8a73) {
                 o.sx=160+o.x-o.z;
                 o.sy=100-o.x/2;
             }

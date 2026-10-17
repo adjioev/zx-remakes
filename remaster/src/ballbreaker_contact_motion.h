@@ -14,7 +14,7 @@ class BBContactMotion {
 public:
     struct Point { double t; BBObject ball, bat; bool anchor = false, contact = false; };
     void clear() { points_.clear(); pending_.clear(); presented_.clear(); smoothed_at_=-1; paced_=false; seeded_=false; last_bat_x_=std::nanf(""); last_bat_change_=0; }
-    void observe(const Spectrum& s, bool hit = false, bool paced = false) {
+    void observe(const Spectrum& s, bool hit = false, bool paced = false, bool mapped_original = false) {
         if (s.peek(0x807a) || s.peek(0x809a) || s.peek(0x8083)>1) return;
         // Capture the actual clock throughout the blend approach, before its
         // phase must agree with exact impact anchors. The paired smoother below
@@ -22,7 +22,7 @@ public:
         if (paced && !hit && s.peek(0x8065) > 40) return;
         pending_.push_back({paced ? s.video_ticks() : s.cpu_ticks(), float(s.peek(0x8064)),
             float(s.peek(hit ? 0x8062 : 0x8065)),
-            paced ? bb_even_paddle_left(s.peek(0x8061),s.peek(0x8063)) : float(s.peek(0x8061)-s.peek(0x8063)/2), float(s.peek(0x8063)), hit});
+            paced ? bb_even_paddle_left(s.peek(0x8061),s.peek(0x8063)) : (mapped_original ? bb_original_paddle_left(float(s.peek(0x8061)-s.peek(0x8063)/2),s.peek(0x8063)) : float(s.peek(0x8061)-s.peek(0x8063)/2)), float(s.peek(0x8063)), hit});
     }
     void observe_falling_paddle(const Spectrum& s) {
         if(s.peek(0x809a) || s.peek(0x8083)>1)return;

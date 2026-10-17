@@ -71,7 +71,7 @@ int main(int argc,char**argv) {
    }
    if(!even && t>10 && preview.paddle_motion_.valid()) {
     float next=preview.paddle_motion_.at(preview.game_t_+.06);
-    float raw=b->peek(0x8061)-b->peek(0x8063)/2;
+    float raw=bb_original_paddle_left(float(b->peek(0x8061)-b->peek(0x8063)/2),b->peek(0x8063));
 
     if(!dir && std::abs(next-raw)>.001)++failures;
     ++checks;
@@ -95,7 +95,7 @@ int main(int argc,char**argv) {
   if(!even && preview.paddle_motion_.valid() &&
      (p->x<-.001 || p->x>96-p->bat_width+.001 ||
       !std::isfinite(p->x)))++failures;
-  maximum_lag=std::max(maximum_lag,std::abs(p->x-(even ? bb_even_paddle_left(b->peek(0x8061),b->peek(0x8063)) : float(b->peek(0x8061)-b->peek(0x8063)/2))));
+  maximum_lag=std::max(maximum_lag,std::abs(p->x-(even ? bb_even_paddle_left(b->peek(0x8061),b->peek(0x8063)) : bb_original_paddle_left(float(b->peek(0x8061)-b->peek(0x8063)/2),b->peek(0x8063)))));
   BBObject confirmed_ball{},confirmed_bat{};
   if(!even && preview.paddle_motion_.valid() &&
      (!preview.contact_motion_.at(t-BB_RENDER_DELAY,confirmed_ball,confirmed_bat) || confirmed_ball.z-5>=40)) {

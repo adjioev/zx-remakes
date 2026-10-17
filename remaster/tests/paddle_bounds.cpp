@@ -32,7 +32,7 @@ int main(int argc,char** argv) {
  auto s=Spectrum::from_z80(d);if(!s)return 2;BallBreakerView v;
  struct Case {int width,centre;bool original,fast;};std::vector<Case> cases;
  for(bool original:{false,true})for(bool fast:{false,true})for(int width:{1,2,3,4,8,12,16})
-  for(int centre:{width/2,width/2+1,46,92-width+width/2+std::min(3,width/2)-1,96-width+width/2})
+  for(int centre:{width/2,width/2+1,46,96-width+width/2+std::min(3,width/2)-1,96-width+width/2})
    cases.push_back({width,centre,original,fast});
  size_t index=0;int expected=0,fail=0,left=0,right=0;bool pending=false;
  s->on_exec(0x89d4,[&](const zxc_regs_t& r){
@@ -44,8 +44,8 @@ int main(int argc,char** argv) {
   expected=c.centre;int half=c.width/2,inset=std::min(3,c.width/2);
   int steps=c.fast?std::clamp(int(std::abs(v.aim_-expected))/2,1,4):1;
   for(int i=0;i<steps;++i) {
-   if(r.bc&4) {if(c.original){if(expected>half+1)expected-=2;}else expected=std::max(half,std::min(92-c.width+half+inset,expected-2));}
-   if(r.bc&2) {if(c.original){if(expected+half<95)expected+=2;}else expected=std::max(half,std::min(92-c.width+half+inset,expected+2));}
+   if(r.bc&4) {if(c.original){if(expected>half+1)expected-=2;}else expected=std::max(half,std::min(96-c.width+half+inset,expected-2));}
+   if(r.bc&2) {if(c.original){if(expected+half<95)expected+=2;}else expected=std::max(half,std::min(96-c.width+half+inset,expected+2));}
   }
   pending=true;
  });
@@ -54,7 +54,7 @@ int main(int argc,char** argv) {
   if(!pending)return;const auto c=cases[index];
   auto b=v.modern_body(*s);
   bool bad=s->peek(0x8061)!=expected;
-  if(!c.original){bad|=b.x0<-.001 || b.x1>92.001;if(b.x0==0)++left;if(b.x1==92)++right;}
+  if(!c.original){bad|=b.x0<-.001 || b.x1>96.001;if(b.x0==0)++left;if(b.x1==96)++right;}
   if(bad){fprintf(stderr,"FAIL case%zu original%d fast%d width%d centre%d got%d expected%d body%.1f..%.1f\n",index,c.original,c.fast,c.width,c.centre,s->peek(0x8061),expected,b.x0,b.x1);++fail;}
   pending=false;++index;
  });
