@@ -71,6 +71,9 @@ struct BBGame {
     // the falling flag (set as the ball leaves the floor past the bat), the slow-ball counter
     uint16_t ball_batch = 0, ball_batch_end = 0, ball_start = 0, ball_falling = 0, ball_slow = 0;
     uint16_t sound_request = 0;  // the original's effect to play (0xA91D writes it: 4 the bat, 5 a wall)
+    // in a pass, just after the game empties its list of objects to redraw (the pointer at 0x8050;
+    // 0x9B7A adds one): the remake's bat, moved, is put on it as the game's own step would
+    uint16_t redraw_list = 0;
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -149,6 +152,10 @@ private:
         float boost = 1;                         // option G: faster a little with each bat hit
         // a bounce off the bat or a wall within the last move: where, and how far through that move
         // (the HD view puts it in the ball's track: between frames it would cut the corner)
+        // a brick touched by the remake's ball: it has bounced already; the game is shown the ball in
+        // that brick (this point) for its own hit (score, the brick's kind), and its turn is skipped
+        bool probe = false;
+        float probe_x = 0, probe_z = 0;
         bool contact = false;
         float contact_at = 1, contact_x = 0, contact_z = 0;
     } hb_;
@@ -162,7 +169,8 @@ private:
     BBPaddleBody body_at(const Spectrum&, float centre) const;  // the same with its centre there
     float bat_x_ = -1, bat_v_ = 0;
     int bat_written_ = -1, bat_dir_ = 0;
-    uint64_t bat_frame_ = 0;  // the frame of its last move (a game pass can come twice in a frame, or not)
+    uint64_t bat_frame_ = 0;
+    int bat_drawn_ = -1;  // the centre the game last redrew the bat at (original pictures)  // the frame of its last move (a game pass can come twice in a frame, or not)
     float bat_target_ = -1;
     void modern_paddle_move(Spectrum&);
     void publish_modern_hit(Spectrum&, BBPaddleHit, std::optional<uint64_t> tick = {});
@@ -266,6 +274,7 @@ private:
     // that way until it is there, so it keeps the original's speed); the HD view marks that point
     bool shown_original_ = false;  // the R view (the pointer is the system's there)
     float aim_ = -1;               // the bat centre's X the mouse asks for (-1: not steering)
+    bool click_was_ = false;       // the mouse button, as it was at the last input (a click is its press)
     bool fast_mouse_ = false;      // option U (a cheat): the bat keeps up with the mouse
     int bat_last_ = -1, bat_step_ = 2;  // the bat centre last frame, its last move
     float rail_x(const Spectrum&, Vector2 pointer) const;

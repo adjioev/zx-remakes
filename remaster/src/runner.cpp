@@ -161,8 +161,21 @@ Rectangle rt_src(const RenderTexture2D& rt, Rectangle r) {
     return {r.x, float(rt.texture.height) - r.y - r.height, r.width, -r.height};
 }
 
+// A pause-screen line the mouse can take: its area on the canvas and the key it stands for.
+struct PauseHit {
+    Rectangle r;
+    int key;
+};
+
+int pause_key(const std::string& name) {  // a key as the pause screen names it
+    if (name == "ESC") return KEY_ESCAPE;
+    if (name.size() == 1 && name[0] >= 'A' && name[0] <= 'Z') return KEY_A + (name[0] - 'A');
+    return 0;
+}
+
 void draw_pause(Vector2 size, const std::string& title, const std::string& help, bool original, bool music,
-                bool effects, int picker, int levels, bool options = false) {
+                bool effects, int picker, int levels, bool options, Vector2 pointer, std::vector<PauseHit>& hits) {
+    hits.clear();
     const Color panel{17, 22, 31, 255}, muted{155, 166, 183, 255};
     const Color accent{255, 214, 96, 255}, rule{49, 59, 74, 255};
     const float scale = std::min({1.0f, (size.x - 64) / 1400, (size.y - 64) / 900});
@@ -175,7 +188,15 @@ void draw_pause(Vector2 size, const std::string& title, const std::string& help,
         while (actual > 1 && MeasureText(value.c_str(), actual) > width*scale) --actual;
         DrawText(value.c_str(), int(x+px*scale), int(y+py*scale), actual, c);
     };
+    // a line with a key: the mouse takes it too (it lights up under the pointer)
+    auto hit = [&](float px, float py, float w, float h, int key) {
+        const Rectangle r{x+px*scale, y+py*scale, w*scale, h*scale};
+        if (!key) return;
+        hits.push_back({r, key});
+        if (CheckCollisionPointRec(pointer, r)) DrawRectangleRec(r, {48, 58, 78, 255});
+    };
     auto row = [&](const std::string& key, const std::string& label, float px, float py, float width) {
+        hit(px - 8, py - 6, width + 8, 58, pause_key(key));
         rect(px, py, 90, 46, {36, 44, 58, 255});
         text(key, px+12, py+10, 25, accent, 66);
         text(label, px+110, py+9, 28, RAYWHITE, width-110);
@@ -190,7 +211,11 @@ void draw_pause(Vector2 size, const std::string& title, const std::string& help,
     rect(56, 238, 1288, 1, rule);
     if (picker >= 0) {
         text("LEVEL", 56, 276, 23, muted, 160);
-        text(std::to_string(picker+1) + " / " + std::to_string(levels), 230, 267, 40, accent, 340);
+        hit(222, 258, 60, 62, KEY_LEFT), hit(498, 258, 60, 62, KEY_RIGHT);
+        text("<", 240, 267, 40, accent, 40);
+        text(std::to_string(picker+1) + " / " + std::to_string(levels), 300, 267, 40, accent, 190);
+        text(">", 516, 267, 40, accent, 40);
+        hit(732, 300, 612, 40, KEY_ENTER);
         text("LEFT / RIGHT   Choose", 740, 265, 25, RAYWHITE, 604);
         text("ENTER          Start level", 740, 307, 25, muted, 604);
     } else text(options ? "The remake's settings" : "Game paused", 56, 280, 28, muted, 1288);
@@ -317,6 +342,15 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
     // the original's sound of a game with no remix both are one: it is silent only with both off
     bool music_on = true, effects_on = true;
     bool mouse_on = false;  // the mouse steers (moved or clicked since the last direction key)
+    // in play with the mouse the pointer is the game's: held in the window (a pointer of our own,
+    // moved by the mouse's motion, kept inside), let go on the pause screen and in the menus
+    bool captured = false;
+    Vector2 pointer{0, 0};
+    std::vector<PauseHit> pause_hits;  // the pause screen's lines the mouse can take
+    auto to_canvas = [&](Vector2 m) {
+        float fit = std::min(float(GetScreenWidth()) / csize.x, float(GetScreenHeight()) / csize.y);
+        return Vector2{(m.x - (GetScreenWidth() - csize.x * fit) / 2) / fit, (m.y - (GetScreenHeight() - csize.y * fit) / 2) / fit};
+    };
     bool options_open = false;  // the pause screen opened from the game's menu (its OPTIONS item)
     view->set_remake(remastered_sound);
     std::vector<SfxEvent> sfx_events;
@@ -465,7 +499,8 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         }
         double wall = GetTime();
         if (paused)
-            draw_pause(csize, info.title, view->help(), original, music_on, effects_on, picker, view->levels(), options_open);
+            draw_pause(csize, info.title, view->help(), original, music_on, effects_on, picker, view->levels(), options_open,
+                       test_dir.empty() ? to_canvas(GetMousePosition()) : Vector2{-1, -1}, pause_hits);
         if (!paused && wall < toast_until) {
             float a = std::min(1.0f, float(toast_until - wall) / 0.4f);
             int w = MeasureText(toast_msg.c_str(), 40) + 60;
@@ -556,28 +591,34 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         if (flip < 1) flip = std::min(1.0f, flip + GetFrameTime() / FLIP_SECONDS);
         if (IsKeyPressed(KEY_TAB)) toggle_view();
         if (paused) {
+            // a click on a line is its key
+            int clicked = 0;
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+                for (const PauseHit& ph : pause_hits)
+                    if (CheckCollisionPointRec(to_canvas(GetMousePosition()), ph.r)) clicked = ph.key;
+            auto key = [&](int k) { return IsKeyPressed(k) || clicked == k; };
             int n = view->levels();
             if (picker >= 0 && n > 0) {
-                if (IsKeyPressed(KEY_LEFT) || pad.pressed(Pad::LEFT)) picker = (picker + n - 1) % n;
-                if (IsKeyPressed(KEY_RIGHT) || pad.pressed(Pad::RIGHT)) picker = (picker + 1) % n;
+                if (key(KEY_LEFT) || pad.pressed(Pad::LEFT)) picker = (picker + n - 1) % n;
+                if (key(KEY_RIGHT) || pad.pressed(Pad::RIGHT)) picker = (picker + 1) % n;
             }
-            if ((IsKeyPressed(KEY_ENTER) || pad.pressed(Pad::A)) && picker >= 0 && picker != view->level(*spec)) {
+            if ((key(KEY_ENTER) || pad.pressed(Pad::A)) && picker >= 0 && picker != view->level(*spec)) {
                 view->jump_to(*spec, picker);
                 char buf[32];
                 std::snprintf(buf, sizeof buf, "SCREEN %d", picker + 1);
                 toast(buf);
                 paused = false;
-            } else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) || pad.pressed(Pad::START) ||
+            } else if (key(KEY_ESCAPE) || key(KEY_ENTER) || pad.pressed(Pad::START) ||
                        IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
                 paused = false;
-            if (IsKeyPressed(KEY_R)) toggle_view();
+            if (key(KEY_R)) toggle_view();
             for (int k = KEY_A; k <= KEY_Z; k++)  // the game's options (the runner's own letters aside)
-                if (k != KEY_R && k != KEY_M && k != KEY_N && k != KEY_F && k != KEY_X && IsKeyPressed(k))
+                if (k != KEY_R && k != KEY_M && k != KEY_N && k != KEY_F && k != KEY_X && key(k))
                     if (std::string m = view->on_key(*spec, k); !m.empty()) toast(m);
-            if (IsKeyPressed(KEY_M)) music_on = !music_on, toast(music_on ? "MUSIC: ON" : "MUSIC: OFF");
-            if (IsKeyPressed(KEY_N)) effects_on = !effects_on, toast(effects_on ? "SOUND EFFECTS: ON" : "SOUND EFFECTS: OFF");
-            if (IsKeyPressed(KEY_F)) ToggleBorderlessWindowed();
-            if (IsKeyPressed(KEY_X) || pad.pressed(Pad::SELECT)) {
+            if (key(KEY_M)) music_on = !music_on, toast(music_on ? "MUSIC: ON" : "MUSIC: OFF");
+            if (key(KEY_N)) effects_on = !effects_on, toast(effects_on ? "SOUND EFFECTS: ON" : "SOUND EFFECTS: OFF");
+            if (key(KEY_F)) ToggleBorderlessWindowed();
+            if (key(KEY_X) || pad.pressed(Pad::SELECT)) {
                 exit = GameExit::Back;
                 break;
             }
@@ -611,9 +652,10 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             Vector2 md = GetMouseDelta();
             h.click = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
             if (std::fabs(md.x) + std::fabs(md.y) > 2 || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) mouse_on = true;
-            float fit = std::min(float(GetScreenWidth()) / csize.x, float(GetScreenHeight()) / csize.y);
-            Vector2 m = GetMousePosition();
-            h.pointer = {(m.x - (GetScreenWidth() - csize.x * fit) / 2) / fit, (m.y - (GetScreenHeight() - csize.y * fit) / 2) / fit};
+            if (captured)  // our pointer, moved by the mouse, kept in the window
+                pointer = {std::clamp(pointer.x + md.x, 0.0f, float(GetScreenWidth() - 1)),
+                           std::clamp(pointer.y + md.y, 0.0f, float(GetScreenHeight() - 1))};
+            h.pointer = to_canvas(captured ? pointer : GetMousePosition());
             h.mouse = mouse_on;
             Controls c = controls_of(h);
             if (c.dirs) mouse_on = false;
@@ -635,7 +677,11 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             if (acc > step) acc = 0;  // too far behind (e.g. the window was dragged): skip
         }
 
-        if (bool hide = mouse_on && !paused && view->hides_pointer(); hide != IsCursorHidden()) hide ? HideCursor() : ShowCursor();
+        if (bool hold = test_dir.empty() && mouse_on && !paused && view->hides_pointer(); hold != captured) {
+            if (hold) pointer = GetMousePosition(), DisableCursor();  // (hidden, and kept in the window)
+            else EnableCursor(), SetMousePosition(int(pointer.x), int(pointer.y));  // back where it was
+            captured = hold;
+        }
         render();
         BeginDrawing();
         ClearBackground(BLACK);
@@ -656,6 +702,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             std::fwrite(dump.data(), 2, dump.size(), f);
             std::fclose(f);
         }
+    if (captured) EnableCursor();  // the game left with the pointer held: give it back
     UnloadRenderTexture(canvas);
     for (auto* rt : {&rt_hd, &rt_orig, &rt_blocks})
         if (rt->id) UnloadRenderTexture(*rt);

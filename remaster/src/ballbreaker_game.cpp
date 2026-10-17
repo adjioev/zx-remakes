@@ -43,7 +43,7 @@ const BBGame BALL_BREAKER = {
     0x89D4,
     0x8B92,
     0x90B2, 0x90D8, 0x80A2, 0x807A, 0x808E,
-    0x808D,
+    0x808D, 0x8F64,
 };
 
 // Ballbreaker II (notes/ballbreaker2.md): its main menu moves an arrow; the item under it is at
@@ -68,7 +68,7 @@ const BBGame BALL_BREAKER_2 = {
     0x89F6,
     0x8BB7,
     0x90D4, 0x90FA, 0x80A1, 0x8079, 0x808D,
-    0x808C,
+    0x808C, 0x8F86,
 };
 
 namespace {
@@ -207,7 +207,8 @@ void BallBreakerView::modern_step(Spectrum& s, const zxc_regs_t& r) {
 void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
     constexpr float SPEED = 2.15f;           // units a frame: the original's ~4.3 a batch, a batch every 2
     constexpr float MAX_ANGLE = 1.05f;       // off the bat's edge (rad, ~60 degrees)
-    constexpr float X_MIN = 5, X_MAX = 0x5B, Z_MAX = 0x94, Z_OUT = 4;
+    constexpr float X_MIN = 5, X_MAX = 0x5B, Z_MAX = 0x94, Z_OUT = 2;  // (the original lets it fall at 4)
+    constexpr float REACH = 2;  // the bat catches this much past its drawn ends (a save, not a miss)
     // never flatter than the bat sends it (a corner could leave it crawling along the room)
     auto steepen = [&](HybridBall& b) {
         const float min_vz = SPEED * std::cos(MAX_ANGLE);
@@ -229,6 +230,10 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
         b.vx = SPEED * dx / n, b.vz = SPEED * dz / n;
         b.frame = frame_ - 1, b.live = true, b.boost = 1, b.bounces = 0;
     } else {
+        if (b.probe) {  // the game's own turn and put-back for the brick the remake bounced off: done
+            b.probe = false;
+            b.wx = ram_x, b.wz = ram_z, b.wdx = ram_dx, b.wdz = ram_dz;
+        }
         // put somewhere else entirely (a new ball for a lost life or the next level): the game's, until
         // it serves it
         if (std::hypot(float(ram_x - b.wx), float(ram_z - b.wz)) > 10) {
@@ -253,7 +258,12 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
             // brick it touches, it comes off that (the game may flip X for a ball going in front on)
             const float dot = b.vx * nx + b.vz * nz;
             const float rx = b.vx - 2 * dot * nx, rz = b.vz - 2 * dot * nz;
-            if (best < BB_BALL_RADIUS + 2 && dot < 0 && (!flip_z || rz * b.vz < 0) && (!flip_x || rx * b.vx < 0)) {
+            // the game's test reaches ~2 further than the sphere on the bat's side: a hit reported for a
+            // ball that has bounced and is leaving that brick is its echo, and is let be (and its put-back)
+            const bool echo = best < BB_BALL_RADIUS + 3 && dot > 0;
+            if (echo) {
+                b.wx = ram_x, b.wz = ram_z;
+            } else if (best < BB_BALL_RADIUS + 2 && dot < 0 && (!flip_z || rz * b.vz < 0) && (!flip_x || rx * b.vx < 0)) {
                 b.vx = rx, b.vz = rz;
             } else {
                 if (flip_z) b.vz = -b.vz;
@@ -281,10 +291,20 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
     const float h = frames ? dist / SPEED / float(steps) : 0;  // velocity is a frame's: a step is h frames
     // the bat as drawn: a box on the floor (its face towards the play at Z = 0x8062), the ball a
     // sphere of radius 6 whose centre is at 0x8064 / 0x8065 (as the HD view draws both)
-    const BBPaddleBody bat = hybrid_body(s);
+    BBPaddleBody bat = hybrid_body(s);
+    bat.x0 -= REACH, bat.x1 += REACH;
     const float R = BB_BALL_RADIUS, bat_mid = (bat.x0 + bat.x1) / 2, bat_half = (bat.x1 - bat.x0) / 2;
     bool out = false;
     int sound = 0;  // the original's effect for a bounce of the remake's (its effects on)
+    // the bricks on the floor (the game tests only those: 0x8A78), as boxes X..X+12, Z-12..Z; not
+    // creatures, missiles, or bricks already bursting
+    std::vector<std::pair<float, float>> bricks;
+    for (uint16_t a = uint16_t(OBJECTS + 30), end = s.peek16(OBJECTS_END); a + 10 <= end; a = uint16_t(a + 10)) {
+        const int sprite = s.peek(uint16_t(a + 3));
+        if (!s.peek(uint16_t(a + 1)) || s.peek(uint16_t(a + 8)) != 0 || (sprite >= 0x11 && sprite <= 0x1F)) continue;
+        if (s.peek(a) & 1) continue;  // a brick set sliding by a hit (0x8E8A): it moves, the game's
+        bricks.push_back({float(s.peek(uint16_t(a + 7))), float(s.peek(uint16_t(a + 9)))});
+    }
     // many bounces without the bat (between walls and bricks that won't break): each further one turns
     // the path a few degrees, so no loop lasts; the ball stays as steep as the bat could send it
     auto nudge = [&] {
@@ -302,6 +322,26 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
         if (b.x < X_MIN) touch(X_MIN, b.z), b.x = 2 * X_MIN - b.x, b.vx = std::fabs(b.vx), sound = 5, nudge();
         if (b.x > X_MAX) touch(X_MAX, b.z), b.x = 2 * X_MAX - b.x, b.vx = -std::fabs(b.vx), sound = 5, nudge();
         if (b.z > Z_MAX) touch(b.x, Z_MAX), b.z = 2 * Z_MAX - b.z, b.vz = -std::fabs(b.vz), sound = 5, nudge();
+        // a brick: the sphere touching its box comes off it there (its nearest point), as a corner
+        // would send it; the game is shown the ball at that point for its own hit
+        if (!b.probe) {
+            float best = R, nx = 0, nz = 0, qx = 0, qz = 0;
+            for (auto [x0, z1] : bricks) {
+                const float px = std::clamp(b.x, x0, x0 + 12), pz2 = std::clamp(b.z, z1 - 12, z1);
+                const float d = std::hypot(b.x - px, b.z - pz2);
+                if (d < best && d > 1e-3f && b.vx * (b.x - px) + b.vz * (b.z - pz2) < 0)
+                    best = d, nx = (b.x - px) / d, nz = (b.z - pz2) / d, qx = px, qz = pz2;
+            }
+            if (best < R) {
+                const float dot = b.vx * nx + b.vz * nz;
+                b.vx -= 2 * dot * nx, b.vz -= 2 * dot * nz;
+                steepen(b);
+                b.x = qx + nx * R, b.z = qz + nz * R;
+                touch(b.x, b.z);
+                b.probe = true, b.probe_x = qx - nx, b.probe_z = qz - nz;
+                b.bounces++;
+            }
+        }
         // the bat: the sphere against its box. On its face the way back is chosen by where it hits
         // (straight from the middle, steeper to the ends); its ends and corners send it back up too
         const float cx = std::clamp(b.x, bat.x0, bat.x1), cz = std::clamp(b.z, bat.z0, bat.z1);
@@ -331,7 +371,7 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
         if (b.z < Z_OUT) out = true;
     }
     b.x = std::clamp(b.x, X_MIN, X_MAX), b.z = std::clamp(b.z, 0.0f, Z_MAX);
-    b.wx = int(std::lround(b.x)), b.wz = int(std::lround(b.z));
+    b.wx = int(std::lround(b.probe ? b.probe_x : b.x)), b.wz = int(std::lround(b.probe ? b.probe_z : b.z));
     b.wdz = b.vz < 0 ? -1 : 1;
     b.wdx = std::abs(b.vx) < SPEED * 0.12f ? 0 : std::clamp(int(std::lround(b.vx / SPEED * 2)), -2, 2);
     if (!b.wdx && std::abs(b.vx) >= SPEED * 0.12f) b.wdx = b.vx < 0 ? -1 : 1;
@@ -555,6 +595,14 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
                 c += 2 * dir;
             }
             sp->poke(BAT_CENTRE, uint8_t(c));
+        });
+    if (g_.redraw_list)
+        s.on_exec(g_.redraw_list, [this, sp](const zxc_regs_t&) {
+            const int centre = sp->peek(BAT_CENTRE);
+            if (!hybrid() || bat_x_ < 0 || centre == bat_drawn_ || sp->peek(g_.bat_eaten)) return;
+            bat_drawn_ = centre;
+            const uint16_t at = sp->peek16(0x8050);  // as 0x9B7A: the bat object (0xF3F5) on the list
+            sp->poke(at, 0xF5), sp->poke(uint16_t(at + 1), 0xF3), sp->poke16(0x8050, uint16_t(at + 2));
         });
     if (g_.ball_batch)
         s.on_exec(g_.ball_batch, [this, sp](const zxc_regs_t& r) {
@@ -804,6 +852,8 @@ void BallBreakerView::after_frame(Spectrum& s) {
 void BallBreakerView::input(Spectrum& s, const Controls& c) {
     std::set<int> keys;
     uint8_t joy = 0;
+    const bool clicked = c.click && !click_was_;  // a press of the mouse button
+    click_was_ = c.click;
     // a key that chose a menu item is still down when the page it opens comes up: it must not
     // count there (it would close the page, or choose again). Nothing until all is let go.
     if (screen_ != input_screen_) {
@@ -831,6 +881,28 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         // back up; the game sees none of it (it would wrap round, or take the item it has)
         const uint8_t pressed = uint8_t(c.dirs & ~menu_dirs_);
         menu_dirs_ = c.dirs;
+        // the mouse: the item under it is chosen (the game's bar walked there with its keys, the
+        // arrow put there), a click on the chosen one takes it (as the HD view lays them out)
+        if (c.mouse && screen_ == BBMenu::Screen::Main && !shown_original_ && !title_now()) {
+            const float dx = c.pointer.x - BBRenderer::W / 2.0f, dy = c.pointer.y - 380 + 35;
+            const int under = std::fabs(dx) <= 320 && dy >= 0 && dy < 8 * 70 ? int(dy / 70) : -1;
+            if (under >= 0) {
+                const int game_item = std::min(under, 5);
+                if (cursor_ == game_item) extra_ = under >= 6 ? under - 5 : 0;
+                const int chosen = extra_ ? 5 + extra_ : cursor_;
+                if (clicked && chosen == under) {
+                    if (extra_) (extra_ == 1 ? options_taken_ : exit_taken_) = wait_release_ = true;
+                    else keys.insert(MENU_SELECT);
+                } else if (cursor_ != game_item) {
+                    extra_ = 0;
+                    if (g_.menu_pointer) {
+                        cursor_ = game_item;
+                        s.poke(g_.menu_pointer, 0x80), s.poke(uint16_t(g_.menu_pointer + 1), uint8_t(0x58 + 16 * cursor_ + 2));
+                    } else if (frame_ % 4 < 2) keys.insert(game_item < cursor_ ? MENU_UP : MENU_DOWN);  // a press at a time
+                }
+                break;
+            }
+        }
         if (screen_ != BBMenu::Screen::Main || shown_original_) extra_ = 0;
         else if (extra_) {
             if (pressed & ZXC_JOY_UP) extra_--, wait_release_ = !extra_;  // (back on the game's: not up again)
@@ -892,7 +964,7 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
             instructions_dir_ = dir;
             if (c.dirs & (ZXC_JOY_LEFT | ZXC_JOY_RIGHT)) break;
         }
-        if (c.ok || c.fire || c.dirs) keys.insert(' ');
+        if (c.ok || c.fire || c.dirs || clicked) keys.insert(' ');
         break;
     case Mode::Play: {
         // the bat runs along the right-hand edge, lower left to upper right: up is right
