@@ -43,6 +43,7 @@ const BBGame BALL_BREAKER = {
     0x89D4,
     0x8B92,
     0x90B2, 0x90D8, 0x80A2, 0x807A, 0x808E,
+    0x808D,
 };
 
 // Ballbreaker II (notes/ballbreaker2.md): its main menu moves an arrow; the item under it is at
@@ -67,6 +68,7 @@ const BBGame BALL_BREAKER_2 = {
     0x89F6,
     0x8BB7,
     0x90D4, 0x90FA, 0x80A1, 0x8079, 0x808D,
+    0x808C,
 };
 
 namespace {
@@ -206,6 +208,13 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
     constexpr float SPEED = 2.15f;           // units a frame: the original's ~4.3 a batch, a batch every 2
     constexpr float MAX_ANGLE = 1.05f;       // off the bat's edge (rad, ~60 degrees)
     constexpr float X_MIN = 5, X_MAX = 0x5B, Z_MAX = 0x94, Z_OUT = 4;
+    // never flatter than the bat sends it (a corner could leave it crawling along the room)
+    auto steepen = [&](HybridBall& b) {
+        const float min_vz = SPEED * std::cos(MAX_ANGLE);
+        if (std::fabs(b.vz) >= min_vz) return;
+        b.vz = std::copysign(min_vz, b.vz == 0 ? -1.0f : b.vz);
+        b.vx = std::copysign(std::sqrt(SPEED * SPEED - min_vz * min_vz), b.vx);
+    };
     const int ram_x = s.peek(BALL_X), ram_z = s.peek(uint16_t(BALL_X + 1));
     const int ram_dx = int8_t(s.peek(0x8067)), ram_dz = int8_t(s.peek(0x8066));
     HybridBall& b = hb_;
@@ -218,47 +227,107 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
         b.x = float(ram_x), b.z = float(ram_z);
         float dx = float(ram_dx), dz = ram_dz < 0 ? -1.0f : 1.0f, n = std::hypot(dx, dz);
         b.vx = SPEED * dx / n, b.vz = SPEED * dz / n;
-        b.frame = frame_ - 1, b.live = true;
+        b.frame = frame_ - 1, b.live = true, b.boost = 1, b.bounces = 0;
     } else {
+        // put somewhere else entirely (a new ball for a lost life or the next level): the game's, until
+        // it serves it
+        if (std::hypot(float(ram_x - b.wx), float(ram_z - b.wz)) > 10) {
+            b.live = false;
+            return;
+        }
+        const bool flip_z = b.wdz && ram_dz == -b.wdz, flip_x = b.wdx && ram_dx == -b.wdx;
+        // a brick hit (the game's): off the brick's box, from its nearest point to the ball, so a
+        // corner sends the ball off at its angle; with no box near, the game's flips as they are
+        if (flip_z || flip_x) {
+            float best = 1e9f, nx = 0, nz = 0;
+            const uint16_t end = s.peek16(OBJECTS_END);
+            for (uint16_t a = uint16_t(OBJECTS + 30); a + 10 <= end; a = uint16_t(a + 10)) {
+                if (!s.peek(uint16_t(a + 1)) || s.peek(uint16_t(a + 8)) != 0) continue;  // gone, or not on the floor
+                const float x0 = s.peek(uint16_t(a + 7)), z1 = s.peek(uint16_t(a + 9));
+                const float qx = std::clamp(b.x, x0, x0 + 12), qz = std::clamp(b.z, z1 - 12, z1);
+                const float d = std::hypot(b.x - qx, b.z - qz);
+                if (d < best && d > 1e-3f) best = d, nx = (b.x - qx) / d, nz = (b.z - qz) / d;
+            }
+            // taken if it turns the ball as the game did (on the axis it flipped): else the nearest box
+            // was a neighbour, and the game's flips are taken; and if the ball still goes into the
+            // brick it touches, it comes off that (the game may flip X for a ball going in front on)
+            const float dot = b.vx * nx + b.vz * nz;
+            const float rx = b.vx - 2 * dot * nx, rz = b.vz - 2 * dot * nz;
+            if (best < BB_BALL_RADIUS + 2 && dot < 0 && (!flip_z || rz * b.vz < 0) && (!flip_x || rx * b.vx < 0)) {
+                b.vx = rx, b.vz = rz;
+            } else {
+                if (flip_z) b.vz = -b.vz;
+                if (flip_x) b.vx = -b.vx;
+                const float d2 = b.vx * nx + b.vz * nz;
+                if (best < BB_BALL_RADIUS && d2 < 0) b.vx -= 2 * d2 * nx, b.vz -= 2 * d2 * nz;
+            }
+            b.bounces++;
+        } else if (!b.wdx && ram_dx) {  // a brick that turns a straight ball aside (0xA689)
+            b.vx = SPEED * 0.3f * float(ram_dx > 0 ? 1 : -1);
+            b.vz = std::copysign(std::sqrt(SPEED * SPEED - b.vx * b.vx), b.vz);
+        }
         if (ram_x != b.wx || ram_z != b.wz) {  // put back (a brick): the way back is part of this batch's
             back = std::hypot(b.x - float(ram_x), b.z - float(ram_z));
             b.x = float(ram_x), b.z = float(ram_z);
         }
-        if (b.wdz && ram_dz == -b.wdz) b.vz = -b.vz;
-        if (b.wdx && ram_dx == -b.wdx) b.vx = -b.vx;
-        else if (!b.wdx && ram_dx) {  // a brick that turns a straight ball aside (0xA689)
-            b.vx = SPEED * 0.3f * float(ram_dx > 0 ? 1 : -1);
-            b.vz = std::copysign(std::sqrt(SPEED * SPEED - b.vx * b.vx), b.vz);
-        }
+        steepen(b);
     }
     const float slow = s.peek16(g_.ball_slow) ? 0.55f : 1.0f;
     const int frames = int(std::min<uint64_t>(frame_ - b.frame, 3));  // a frame a pass; 0: moved this pass
     b.frame = frame_;
-    const float dist = std::max(0.0f, SPEED * slow * float(frames) - back);
-    const int steps = frames ? std::max(1, int(std::ceil(dist))) : 0;
-    const float h = steps ? dist / SPEED / float(steps) : 0;  // velocity is a frame's: a step is h frames
-    const float bat_z = s.peek(BAT_Z), centre = s.peek(BAT_CENTRE), half = float(s.peek(BAT_WIDTH) / 2);
+    const float dist = std::max(0.0f, SPEED * slow * b.boost * float(frames) - back);
+    // (moved already this frame: one step of none, the bat may have come at the ball since)
+    const int steps = frames ? std::max(1, int(std::ceil(dist))) : 1;
+    const float h = frames ? dist / SPEED / float(steps) : 0;  // velocity is a frame's: a step is h frames
+    // the bat as drawn: a box on the floor (its face towards the play at Z = 0x8062), the ball a
+    // sphere of radius 6 whose centre is at 0x8064 / 0x8065 (as the HD view draws both)
+    const BBPaddleBody bat = hybrid_body(s);
+    const float R = BB_BALL_RADIUS, bat_mid = (bat.x0 + bat.x1) / 2, bat_half = (bat.x1 - bat.x0) / 2;
     bool out = false;
+    int sound = 0;  // the original's effect for a bounce of the remake's (its effects on)
+    // many bounces without the bat (between walls and bricks that won't break): each further one turns
+    // the path a few degrees, so no loop lasts; the ball stays as steep as the bat could send it
+    auto nudge = [&] {
+        if (++b.bounces < 8) return;
+        const float a = (frame_ & 1 ? 1.0f : -1.0f) * (0.035f + 0.01f * float(frame_ % 3));
+        const float vx = b.vx * std::cos(a) - b.vz * std::sin(a), vz = b.vx * std::sin(a) + b.vz * std::cos(a);
+        if (std::fabs(vz) >= SPEED * std::cos(MAX_ANGLE)) b.vx = vx, b.vz = vz;
+    };
     for (int i = 0; i < steps && !out; i++) {
         const float pz = b.z;
         b.x += b.vx * h, b.z += b.vz * h;
-        if (b.x < X_MIN) b.x = 2 * X_MIN - b.x, b.vx = std::fabs(b.vx);
-        if (b.x > X_MAX) b.x = 2 * X_MAX - b.x, b.vx = -std::fabs(b.vx);
-        if (b.z > Z_MAX) b.z = 2 * Z_MAX - b.z, b.vz = -std::fabs(b.vz);
-        // the bat: the original's interval (ball X + 3 past its left end, X - 6 short of its right),
-        // the ball coming down onto its line now or already below it (beside the bat, as the original)
-        if (b.vz < 0 && b.z < bat_z) {
-            const float t = pz > bat_z && pz != b.z ? (pz - bat_z) / (pz - b.z) : 1.0f;
-            const float xc = b.x - b.vx * h * (1 - t);
-            if (xc + 3 >= std::max(0.0f, centre - half) && xc - 6 < centre + half) {
-                const float along = std::clamp((xc - (centre + 1.5f)) / (half + 4.5f), -1.0f, 1.0f);
-                const float a = along * MAX_ANGLE;
-                b.vx = SPEED * std::sin(a), b.vz = SPEED * std::cos(a);
-                if (pz > bat_z) b.z = bat_z + (bat_z - b.z);
-                b.x = xc;
-                paddle_hit_ = {++paddle_hit_id_, double(frame_ + 1) / Spectrum::FRAME_HZ, (along + 1) / 2};
+        auto touch = [&](float x, float z) {
+            if (!b.contact) b.contact = true, b.contact_at = float(i + 1) / float(steps), b.contact_x = x, b.contact_z = z;
+        };
+        if (b.x < X_MIN) touch(X_MIN, b.z), b.x = 2 * X_MIN - b.x, b.vx = std::fabs(b.vx), sound = 5, nudge();
+        if (b.x > X_MAX) touch(X_MAX, b.z), b.x = 2 * X_MAX - b.x, b.vx = -std::fabs(b.vx), sound = 5, nudge();
+        if (b.z > Z_MAX) touch(b.x, Z_MAX), b.z = 2 * Z_MAX - b.z, b.vz = -std::fabs(b.vz), sound = 5, nudge();
+        // the bat: the sphere against its box. On its face the way back is chosen by where it hits
+        // (straight from the middle, steeper to the ends); its ends and corners send it back up too
+        const float cx = std::clamp(b.x, bat.x0, bat.x1), cz = std::clamp(b.z, bat.z0, bat.z1);
+        const float ex = b.x - cx, ez = b.z - cz, d = std::hypot(ex, ez);
+        if (d < R) {
+            const float nx = d > 1e-4f ? ex / d : 0.0f, nz = d > 1e-4f ? ez / d : 1.0f;
+            const bool pushed = bat_v_ * nx > 0.1f;  // the bat coming at the ball's side
+            if (b.vx * nx + b.vz * nz < 0 || pushed) {
+                if (nz > 0.7f) {
+                    const float along = std::clamp((b.x - bat_mid) / (bat_half + R * 0.5f), -1.0f, 1.0f);
+                    const float a = along * MAX_ANGLE;
+                    b.vx = SPEED * std::sin(a), b.vz = SPEED * std::cos(a);
+                    paddle_hit_ = {++paddle_hit_id_, double(frame_ + 1) / Spectrum::FRAME_HZ, (along + 1) / 2};
+                    if (speed_up_) b.boost = std::min(1.5f, b.boost * 1.025f);  // 2.5% a hit, at most half again
+                } else {
+                    // an end or a corner (or the bat run into the ball's side): a save, as arcade bats
+                    // have it: back up at the steepest angle, away to that side
+                    b.vx = std::copysign(SPEED * std::sin(MAX_ANGLE), nx), b.vz = SPEED * std::cos(MAX_ANGLE);
+                    paddle_hit_ = {++paddle_hit_id_, double(frame_ + 1) / Spectrum::FRAME_HZ, nx < 0 ? 0.0f : 1.0f};
+                }
+                b.x = cx + nx * R, b.z = cz + nz * R;
+                touch(b.x, b.z);
+                sound = 4, b.bounces = 0;
             }
         }
+        (void)pz;
         if (b.z < Z_OUT) out = true;
     }
     b.x = std::clamp(b.x, X_MIN, X_MAX), b.z = std::clamp(b.z, 0.0f, Z_MAX);
@@ -269,7 +338,74 @@ void BallBreakerView::hybrid_step(Spectrum& s, bool batch) {
     if (frames) s.poke(g_.ball_start, uint8_t(ram_x)), s.poke(uint16_t(g_.ball_start + 1), uint8_t(ram_z));
     s.poke(BALL_X, uint8_t(b.wx)), s.poke(uint16_t(BALL_X + 1), uint8_t(b.wz));
     s.poke(0x8067, uint8_t(int8_t(b.wdx))), s.poke(0x8066, uint8_t(int8_t(b.wdz)));
+    if (sound && g_.sound_request && !s.peek(SOUND_FX)) s.poke(g_.sound_request, uint8_t(sound));
     if (out) s.poke(g_.ball_falling, 1), b.live = false;  // past the bat: the game lets it fall
+}
+
+void BallBreakerView::hybrid_bat(Spectrum& s) {
+    constexpr float VMAX = 3.2f, ACC = 0.8f, MOUSE_MAX = 8;  // units a frame (the original: 2, no build-up)
+    const int centre = s.peek(BAT_CENTRE), half = s.peek(BAT_WIDTH) / 2;
+    if (bat_x_ < 0 || centre != bat_written_) bat_x_ = float(centre), bat_v_ = 0;  // the game put it (a serve)
+    if (s.peek(g_.bat_eaten)) {  // being eaten: it stays (as the original's)
+        bat_v_ = 0, bat_written_ = centre;
+        return;
+    }
+    // its ends as the original's steps reach them: left while centre > width / 2 + 1, right while
+    // centre + width / 2 < 0x5F
+    const float lo = float(half + 1), hi = float(0x5F - half);
+    // a move a frame, whatever the passes (two in a frame would double its speed)
+    const int frames = int(std::min<uint64_t>(frame_ - bat_frame_, 3));
+    bat_frame_ = frame_;
+    for (int i = 0; i < frames; i++) {
+        if (bat_target_ >= 0) {
+            bat_v_ = std::clamp(std::clamp(bat_target_, lo, hi) - bat_x_, -MOUSE_MAX, MOUSE_MAX);
+        } else if (bat_dir_) {
+            if (bat_v_ * float(bat_dir_) < 0) bat_v_ = 0;  // turning: from rest at once
+            bat_v_ = std::clamp(bat_v_ + ACC * float(bat_dir_), -VMAX, VMAX);
+        } else bat_v_ = 0;
+        float to = std::clamp(bat_x_ + bat_v_, lo, hi);
+        // the ball in its way (level with its end): it stops where it meets the ball, which it then
+        // knocks away (hybrid_step: an end run into the ball); a fast flick never passes through
+        if (hb_.live && to != bat_x_) {
+            const BBPaddleBody now = body_at(s, bat_x_);
+            const float dz = hb_.z - std::clamp(hb_.z, now.z0, now.z1);
+            const float reach = BB_BALL_RADIUS * BB_BALL_RADIUS - dz * dz;
+            if (reach > 0) {
+                const float r = std::sqrt(reach) - 0.05f;  // a touch, so the contact is seen
+                const bool right = to > bat_x_;
+                auto gap = [&](float c) { const BBPaddleBody b = body_at(s, c); return right ? hb_.x - b.x1 : b.x0 - hb_.x; };
+                if (gap(bat_x_) >= r && gap(to) < r) {
+                    float a = bat_x_, z = to;  // the meeting point, by halves
+                    for (int k = 0; k < 20; k++) {
+                        const float m = (a + z) / 2;
+                        (gap(m) >= r ? a : z) = m;
+                    }
+                    to = z;
+                }
+            }
+        }
+        bat_x_ = to;
+    }
+    bat_written_ = int(std::lround(bat_x_));
+    s.poke(BAT_CENTRE, uint8_t(bat_written_));
+}
+
+BBPaddleBody BallBreakerView::hybrid_body(const Spectrum& s) const { return body_at(s, bat_centre(s)); }
+
+BBPaddleBody BallBreakerView::body_at(const Spectrum& s, float centre) const {
+    uint8_t mask[120];
+    const int sprite = std::clamp(int(s.peek(0xF3F8)), 0, 59);  // the bat object's sprite
+    for (int i = 0; i < 120; ++i) mask[i] = s.peek(uint16_t(g_.sprites + sprite * 120 + i));
+    const int width = std::max(1, int(s.peek(BAT_WIDTH)));
+    const float native = centre - float(width / 2);
+    const bool bb1 = g_.paddle_hit == 0x8a73;  // BB1's HD bat spans the room's corners (read_state)
+    return bb_visible_paddle_body(bb1 ? bb_original_paddle_left(native, width) : native, float(width), s.peek(BAT_Z),
+                                  bb1 ? bb_even_paddle_inset(width) : 0, bb_paddle_shape(mask));
+}
+
+float BallBreakerView::bat_centre(const Spectrum& s) const {
+    const int centre = s.peek(BAT_CENTRE);
+    return hybrid() && bat_x_ >= 0 && centre == bat_written_ ? bat_x_ : float(centre);
 }
 
 void BallBreakerView::modern_paddle_move(Spectrum& s) {
@@ -496,6 +632,8 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
         static const bool off = std::getenv("BB_NO_TURBO") != nullptr;
         passes_++;
         // Even: the remake's ball in flight moves a frame each pass, before the game tests the bricks
+        if (hybrid() && mode_ == Mode::Play) hybrid_bat(*sp);
+        else bat_x_ = -1;
         if (hybrid() && hb_.live && frame_ - hb_.batch <= 4 && !sp->peek(g_.ball_falling)) hybrid_step(*sp, false);
         // The serve/death countdown contains HALT and already waits on interrupts.
         // Adding a frame wait there would double those intentional pauses.
@@ -761,6 +899,13 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         if (c.dirs & (ZXC_JOY_LEFT | ZXC_JOY_DOWN)) joy |= ZXC_JOY_LEFT;
         if (c.dirs & (ZXC_JOY_RIGHT | ZXC_JOY_UP)) joy |= ZXC_JOY_RIGHT;
         if (c.fire || c.click) joy |= ZXC_JOY_FIRE;
+        if (hybrid()) {  // the remake moves the bat (hybrid_bat): the game sees fire only
+            bat_dir_ = bool(joy & ZXC_JOY_RIGHT) - bool(joy & ZXC_JOY_LEFT);
+            bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : -1;
+            joy &= ZXC_JOY_FIRE;
+            aim_ = -1;
+            break;
+        }
         const int centre = s.peek(BAT_CENTRE);
         // (a jump, e.g. to the start of a level, isn't a step)
         if (bat_last_ >= 0 && centre != bat_last_ && std::abs(centre - bat_last_) <= 6) bat_step_ = std::abs(centre - bat_last_);
@@ -801,7 +946,8 @@ std::string BallBreakerView::help() const {
     return std::string("O  Speed: ") + (original_speed_ ? "Original" : "Even") +
            "\nT  Theme: " + (hd_ ? hd_->theme_name() : "Neon / Tron") +
            "\nL  Cheats: " + (unlimited_lives_ && unlimited_missiles_ ? "On" : "Off") +
-           "\nU  Mouse: " + (fast_mouse_ ? "Fast (cheat)" : "Original speed") +
+           (original_speed_ ? std::string("\nU  Mouse: ") + (fast_mouse_ ? "Fast (cheat)" : "Original speed")
+                            : std::string("\nG  Speed-up: ") + (speed_up_ ? "On" : "Off")) +
            "\n\nMove: Arrows / WASD / gamepad / mouse\nFire missile: Space / Ctrl / gamepad A / click";
 }
 
@@ -814,6 +960,10 @@ std::string BallBreakerView::on_key(Spectrum&, int key) {
         const bool enabled = !(unlimited_lives_ && unlimited_missiles_);
         unlimited_lives_ = unlimited_missiles_ = enabled;
         return enabled ? "UNLIMITED LIVES + MISSILES: ON" : "UNLIMITED LIVES + MISSILES: OFF";
+    }
+    if (key == KEY_G && hybrid()) {
+        speed_up_ = !speed_up_;
+        return speed_up_ ? "SPEED-UP: ON (THE BALL GAINS PACE)" : "SPEED-UP: OFF";
     }
     if (key == KEY_U) {
         fast_mouse_ = !fast_mouse_;
@@ -856,6 +1006,12 @@ BBState BallBreakerView::read_state(const Spectrum& s) const {
             o.z = float(s.peek(BAT_Z));
             o.bat_width = float(s.peek(BAT_WIDTH));
             o.bat_inset = g_.paddle_hit == 0x8a73 ? bb_even_paddle_inset(int(o.bat_width)) : 0;
+            if (const float shift = bat_centre(s) - float(s.peek(BAT_CENTRE)); shift != 0) {
+                // the remake's bat, to the fraction (BB1: through its HD rail as below)
+                o.x = g_.paddle_hit == 0x8a73 ? bb_original_paddle_left(float(s.peek(BAT_CENTRE) - s.peek(BAT_WIDTH) / 2) + shift, s.peek(BAT_WIDTH))
+                                              : o.x + shift;
+                if (g_.paddle_hit != 0x8a73) o.sx += shift, o.sy -= shift / 2;
+            }
             if(g_.paddle_hit==0x8a73) {
                 o.sx=160+o.x-o.z;
                 o.sy=100-o.x/2;
@@ -1086,6 +1242,14 @@ void BallBreakerView::smooth_sample(const Spectrum& s) {
         }
         if (moved) {
             Sample sample{sample_t, {v[0], v[1], v[2], v[3], v[4]}};
+            if (o.slot == 0 && hb_.contact && hybrid() && !tr.samples.empty() && sample_t > tr.samples.back().t) {
+                // the remake's ball bounced within this move: its touch, at its time, so the picture
+                // reaches the bat or the wall before it turns
+                const float x = hb_.contact_x, z = hb_.contact_z;
+                const double at = tr.samples.back().t + (sample_t - tr.samples.back().t) * hb_.contact_at;
+                tr.samples.push_back({at, {148 + x - z, 104 - x / 2, std::max(0.0f, x - 5), 0, z + 5}});
+            }
+            if (o.slot == 0) hb_.contact = false;
             tr.samples.push_back(sample);
             if (o.slot == 0) {  // the ball's steps: how long the game takes between its moves
                 if (ball_moved_t_ >= 0 && t - ball_moved_t_ < 0.3) {

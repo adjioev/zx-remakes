@@ -1421,11 +1421,12 @@ std::vector<const BBObject*> BBRenderer::scene_order(const BBState& s) const {
         const float x = sphere->x + 5;
         const float z = 160 + x - (sphere->sx + 12);
         const float y = 118 - x / 2 - (sphere->sy + 10);
-        // Keep the sphere behind the solid paddle until it clears a visible face.
-        // Centre-only ordering lets a still-overlapping sphere pop over the end.
-        const bool in_front = x + BALL_RADIUS <= body.x0 ||
-                              z + BALL_RADIUS <= body.z0 ||
-                              y - BALL_RADIUS >= body.height;
+        // Two convex bodies: the sphere is in front when it lies towards the viewer from the paddle's
+        // nearest point to it. Into the picture is (2, -1, 2) in X, Y, Z (it projects to a point).
+        // (A sphere touching an end is in front of it, one at the play face behind it.)
+        const float qx = std::clamp(x, body.x0, body.x1), qy = std::clamp(y, 0.0f, body.height),
+                    qz = std::clamp(z, body.z0, body.z1);
+        const bool in_front = 2 * (x - qx) - (y - qy) + 2 * (z - qz) < 0;
         if ((ball_it > bat_it) != in_front) {
             // Correct only this pair, outside the comparator: a pair-specific
             // comparison inside stable_sort would not be a strict weak ordering.

@@ -70,6 +70,7 @@ struct BBGame {
     // the result after it; the position the batch started from (a brick hit puts the ball back there),
     // the falling flag (set as the ball leaves the floor past the bat), the slow-ball counter
     uint16_t ball_batch = 0, ball_batch_end = 0, ball_start = 0, ball_falling = 0, ball_slow = 0;
+    uint16_t sound_request = 0;  // the original's effect to play (0xA91D writes it: 4 the bat, 5 a wall)
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -144,8 +145,25 @@ private:
         int wx = -1, wz = -1, wdx = 0, wdz = 0;  // what was last written: position, directions
         uint64_t frame = 0, batch = 0;           // the frames of the last move, the last batch
         bool live = false;                       // in flight (from a batch on, until it falls)
+        int bounces = 0;                         // off walls and bricks since the bat: a loop is nudged
+        float boost = 1;                         // option G: faster a little with each bat hit
+        // a bounce off the bat or a wall within the last move: where, and how far through that move
+        // (the HD view puts it in the ball's track: between frames it would cut the corner)
+        bool contact = false;
+        float contact_at = 1, contact_x = 0, contact_z = 0;
     } hb_;
     bool hybrid_ = true;
+    bool speed_up_ = false;  // option G (Even): the ball gains speed as the bat hits it, until it is lost
+    // Even: the bat moved by the remake too (the game gets no directions): a fractional centre, sped up
+    // from the keys (or the pad), straight after the mouse
+    void hybrid_bat(Spectrum&);
+    float bat_centre(const Spectrum&) const;  // the remake's if it has the bat, else the game's
+    BBPaddleBody hybrid_body(const Spectrum&) const;  // the bat as the HD view draws it (floor X / Z)
+    BBPaddleBody body_at(const Spectrum&, float centre) const;  // the same with its centre there
+    float bat_x_ = -1, bat_v_ = 0;
+    int bat_written_ = -1, bat_dir_ = 0;
+    uint64_t bat_frame_ = 0;  // the frame of its last move (a game pass can come twice in a frame, or not)
+    float bat_target_ = -1;
     void modern_paddle_move(Spectrum&);
     void publish_modern_hit(Spectrum&, BBPaddleHit, std::optional<uint64_t> tick = {});
     BBPaddleHit resolve_modern_hit(Spectrum&, BBPaddleSweep, BBPaddleBody, float paddle_dx, bool step);
