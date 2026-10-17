@@ -3,7 +3,7 @@
 //
 // Controls: the keyboard and gamepad become Controls (game.h), which the game's module turns
 // into what the original reads. Remake keys: Esc / gamepad Start pause (there R original / HD,
-// M sound, F full screen, X / Select back to the game list, and for games with levels LEFT /
+// M music, N sound effects (also in play), F full screen, X / Select back to the game list, and for games with levels LEFT /
 // RIGHT + ENTER to jump to one), Tab original / HD at any time, R too while the game reads no
 // letters (GameView::letters_free), F11 full screen. Switching views dissolves one into the
 // other through growing and shrinking pixels (as in Opera Soft Remastered).
@@ -11,11 +11,13 @@
 //   zxremakes --test <out_dir> [--game <key>] [--file <game file>] [script]
 //     Script tokens: "<sec>+<key>", "<sec>-<key>", "<sec>@<cmd>"; sec = seconds of game time
 //     (50 frames each). Keys are the player's, as on the PC: a-z 0-9 space enter ctrl shift
-//     alt backspace left right up down, and the gamepad pa pb px (buttons), pl pr pu pd.
+//     alt backspace left right up down, the gamepad pa pb px (buttons), pl pr pu pd, and the
+//     mouse's left button click.
 //     Commands: shot (canvas -> shot_<n>.png), ram (64 KB as paged + the banks ->
 //     ram_<n>.bin), orig / hd (the R view, at once), r (as the key: the dissolve), level<n> (jump
 //     there, 1-based, if the game can now), key<letter> (a game option key, e.g. keyl), poke<addr>=<value> (hex, e.g. poke8078=2),
-//     pokeat<pc>:<addr>=<value> (once, the next time the CPU gets to pc), quit.
+//     pokeat<pc>:<addr>=<value> (once, the next time the CPU gets to pc), pause / resume (overlay),
+//     mouse<x>,<y> (the mouse steers, pointing there in canvas pixels), nomouse, quit.
 //     The run ends at the last event.
 
 #include <algorithm>
@@ -56,6 +58,8 @@ struct Held {
     std::set<int> keys;
     uint8_t pad_dirs = 0;
     bool pa = false, pb = false, px = false;
+    bool mouse = false, click = false;  // the mouse steering, its left button
+    Vector2 pointer{-1, -1};            // in canvas pixels
 };
 
 // The PC keys that reach the game, by script name.
@@ -91,7 +95,7 @@ bool hold(Held& h, const std::string& name, bool down) {
             known = true;
             h.pad_dirs = down ? h.pad_dirs | b : h.pad_dirs & ~b;
         }
-    bool* btn = name == "pa" ? &h.pa : name == "pb" ? &h.pb : name == "px" ? &h.px : nullptr;
+    bool* btn = name == "pa" ? &h.pa : name == "pb" ? &h.pb : name == "px" ? &h.px : name == "click" ? &h.click : nullptr;
     if (btn) *btn = down, known = true;
     return known;
 }
@@ -109,6 +113,7 @@ Controls controls_of(const Held& h) {
     c.ok = enter || on(KEY_SPACE) || h.pa;
     c.pad_b = h.pb;
     c.pad_x = h.px;
+    c.mouse = h.mouse && !c.dirs, c.pointer = h.pointer, c.click = h.click;
     for (int i = 0; i < 26; i++)
         if (on(KEY_A + i)) c.keys.insert('a' + i);
     for (int i = 0; i < 10; i++)
@@ -117,7 +122,7 @@ Controls controls_of(const Held& h) {
     if (enter) c.keys.insert(0x0D);
     if (on(KEY_LEFT_SHIFT) || on(KEY_RIGHT_SHIFT)) c.keys.insert(0x0E);
     if (on(KEY_LEFT_ALT) || on(KEY_RIGHT_ALT)) c.keys.insert(0x0F);
-    if (on(KEY_BACKSPACE)) c.keys.insert(0x0E), c.keys.insert('0');  // DELETE = CAPS SHIFT + 0
+    if (on(KEY_BACKSPACE)) c.keys.insert(0x0C);  // DELETE (chips: CAPS SHIFT + 0)
     return c;
 }
 
@@ -156,30 +161,63 @@ Rectangle rt_src(const RenderTexture2D& rt, Rectangle r) {
     return {r.x, float(rt.texture.height) - r.y - r.height, r.width, -r.height};
 }
 
-void draw_pause(Vector2 size, const std::string& title, const std::string& help, bool original, bool muted,
-                int picker, int levels) {
-    DrawRectangle(0, 0, int(size.x), int(size.y), Fade(BLACK, 0.7f));
-    auto centred = [&](const std::string& t, float y, int px, Color c) {
-        DrawText(t.c_str(), int(size.x / 2 - float(MeasureText(t.c_str(), px)) / 2), int(y), px, c);
+void draw_pause(Vector2 size, const std::string& title, const std::string& help, bool original, bool music,
+                bool effects, int picker, int levels, bool options = false) {
+    const Color panel{17, 22, 31, 255}, muted{155, 166, 183, 255};
+    const Color accent{255, 214, 96, 255}, rule{49, 59, 74, 255};
+    const float scale = std::min({1.0f, (size.x - 64) / 1400, (size.y - 64) / 900});
+    const float x = (size.x - 1400*scale)/2, y = (size.y - 900*scale)/2;
+    auto rect = [&](float px, float py, float w, float h, Color c) {
+        DrawRectangleRec({x+px*scale, y+py*scale, w*scale, h*scale}, c);
     };
-    float y = size.y * 0.25f;
-    centred(title, y, 90, {255, 214, 96, 255});
-    centred("PAUSED", y + 120, 50, RAYWHITE);
-    centred("ESC  continue      X  back to the game list", y + 230, 40, RAYWHITE);
-    centred(std::string("R  ") + (original ? "original 1987" : "remake") + " (picture and sound)      M  sound: " +
-                (muted ? "off" : "on") + "      F  full screen",
-            y + 290, 40, RAYWHITE);
-    centred("Tab  original / HD      F11  full screen      gamepad: Start pause, Select back", y + 350, 32,
-            Fade(RAYWHITE, 0.7f));
-    float hy = y + 430;
-    if (picker >= 0) {  // jump to another level
-        char buf[96];
-        std::snprintf(buf, sizeof buf, "SCREEN   <  %d  >   of %d      LEFT / RIGHT  choose      ENTER  go", picker + 1, levels);
-        centred(buf, y + 410, 40, {255, 214, 96, 255});
-        hy += 50;
-    }
+    auto text = [&](const std::string& value, float px, float py, int font, Color c, float width) {
+        int actual = std::max(1, int(font*scale));
+        while (actual > 1 && MeasureText(value.c_str(), actual) > width*scale) --actual;
+        DrawText(value.c_str(), int(x+px*scale), int(y+py*scale), actual, c);
+    };
+    auto row = [&](const std::string& key, const std::string& label, float px, float py, float width) {
+        rect(px, py, 90, 46, {36, 44, 58, 255});
+        text(key, px+12, py+10, 25, accent, 66);
+        text(label, px+110, py+9, 28, RAYWHITE, width-110);
+    };
+    DrawRectangle(0, 0, int(size.x), int(size.y), Fade(BLACK, 0.65f));
+    rect(0, 0, 1400, 900, panel);
+    rect(0, 0, 1400, 3, accent);
+    text(options ? "OPTIONS" : "PAUSED", 56, 42, 42, RAYWHITE, 850);
+    text(title, 56, 100, 26, muted, 1288);
+    row("ESC", options ? "Back to the menu" : "Resume game", 56, 162, 600);
+    row("X", "Back to game list", 740, 162, 604);
+    rect(56, 238, 1288, 1, rule);
+    if (picker >= 0) {
+        text("LEVEL", 56, 276, 23, muted, 160);
+        text(std::to_string(picker+1) + " / " + std::to_string(levels), 230, 267, 40, accent, 340);
+        text("LEFT / RIGHT   Choose", 740, 265, 25, RAYWHITE, 604);
+        text("ENTER          Start level", 740, 307, 25, muted, 604);
+    } else text(options ? "The remake's settings" : "Game paused", 56, 280, 28, muted, 1288);
+    rect(56, 365, 1288, 1, rule);
+    text("DISPLAY & AUDIO", 56, 399, 23, muted, 600);
+    text("GAME OPTIONS", 740, 399, 23, muted, 604);
+    row("R", original ? "Original graphics & sound" : "HD graphics & sound", 56, 447, 600);
+    row("M", std::string("Music: ") + (music ? "On" : "Off"), 56, 509, 600);
+    row("N", std::string("Sound effects: ") + (effects ? "On" : "Off"), 56, 571, 600);
+    row("F", "Fullscreen", 56, 633, 600);
     std::istringstream lines(help);
-    for (std::string l; std::getline(lines, l); hy += 44) centred(l, hy, 32, Fade(RAYWHITE, 0.7f));
+    bool controls = false;
+    float option_y = 447, control_y = 740;
+    for (std::string line; std::getline(lines, line);) {
+        if (line.empty()) { controls = true; continue; }
+        if (controls) {
+            text(line, 56, control_y, 25, muted, 1288);
+            control_y += 38;
+        } else {
+            const auto split = line.find("  ");
+            row(split == std::string::npos ? "" : line.substr(0, split),
+                split == std::string::npos ? line : line.substr(split+2), 740, option_y, 604);
+            option_y += 62;
+        }
+    }
+    rect(56, 711, 1288, 1, rule);
+    text("GAMEPAD   Start: resume     Select: back", 56, 836, 23, muted, 1288);
 }
 
 }  // namespace
@@ -189,6 +227,8 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
     const GameInfo& info = game_info(game.variant->game);
     std::vector<ScriptEvent> script;
     if (!test_dir.empty()) {
+        // a scripted run: the games keep nothing of it (hi-scores...); ZX_TEST_HISCORES=1 to check that they do
+        if (!std::getenv("ZX_TEST_HISCORES")) setenv("ZXREMAKES_TEST", "1", 1);
         try {
             script = parse_script(script_text.empty() ? DEFAULT_SCRIPT : script_text);
         } catch (const std::exception& e) {
@@ -267,6 +307,11 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
     std::unique_ptr<MusicRemix> remix = view->make_remix(Spectrum::SAMPLE_RATE);
     SfxBank sfx(Spectrum::SAMPLE_RATE);
     bool remastered_sound = remix != nullptr;
+    // M music, N sound effects (the remake's, and the original's own while its tune is not on); in
+    // the original's sound of a game with no remix both are one: it is silent only with both off
+    bool music_on = true, effects_on = true;
+    bool mouse_on = false;  // the mouse steers (moved or clicked since the last direction key)
+    bool options_open = false;  // the pause screen opened from the game's menu (its OPTIONS item)
     view->set_remake(remastered_sound);
     std::vector<SfxEvent> sfx_events;
     const char* dump_path = std::getenv("ZX_AUDIO_DUMP");
@@ -323,10 +368,16 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         static int was_playing = -1;
         if (music_log && remix && int(remix->playing()) != was_playing)
             was_playing = remix->playing(), std::fprintf(stderr, "frame %llu remix %s\n", (unsigned long long)spec->frames(), was_playing ? "on" : "off");
-        if (remix && remastered_sound && remix->playing()) remix->frame(regs, stereo.data(), n);
+        if (remix && remastered_sound && remix->playing()) remix->frame(regs, music_on ? stereo.data() : nullptr, n);
         else {
             if (remix) remix->frame(regs, nullptr, n);  // keep following the tune
-            for (int i = 0; i < n; i++) stereo[size_t(i) * 2] = stereo[size_t(i) * 2 + 1] = samples[size_t(i)];
+            // the original's AY: its tune or its effects. With a remix following it, which one is
+            // known (the tune: M, effects: N), in the original's sound (R) too; a game without a
+            // remix: its tune in the remake's sound, both together in the original's
+            bool hear = remix ? (remix->playing() ? music_on : effects_on)
+                              : remastered_sound ? music_on : (music_on || effects_on);
+            if (hear)
+                for (int i = 0; i < n; i++) stereo[size_t(i) * 2] = stereo[size_t(i) * 2 + 1] = samples[size_t(i)];
         }
         if (view->music_restarted() && remix) {
             remix->restart();
@@ -337,7 +388,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         static const bool sfx_log = std::getenv("ZX_SFX_LOG") != nullptr;
         for (const SfxEvent& e : sfx_events) {
             if (sfx_log) std::fprintf(stderr, "frame %llu sfx %d pan %.2f pitch %d\n", (unsigned long long)spec->frames(), int(e.kind), e.pan, e.pitch);
-            if (remastered_sound) sfx.play(e);
+            if (remastered_sound && effects_on) sfx.play(e);
         }
         sfx.mix(stereo.data(), n);
         if (audio) audio->push(stereo.data(), n);
@@ -408,8 +459,8 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         }
         double wall = GetTime();
         if (paused)
-            draw_pause(csize, info.title, view->help(), original, audio && audio->muted(), picker, view->levels());
-        if (wall < toast_until) {
+            draw_pause(csize, info.title, view->help(), original, music_on, effects_on, picker, view->levels(), options_open);
+        if (!paused && wall < toast_until) {
             float a = std::min(1.0f, float(toast_until - wall) / 0.4f);
             int w = MeasureText(toast_msg.c_str(), 40) + 60;
             DrawRectangleRounded({(csize.x - float(w)) / 2, 40, float(w), 64}, 0.4f, 8, Fade(BLACK, 0.7f * a));
@@ -439,7 +490,14 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                         std::fwrite(d.data(), 1, d.size(), f);
                         std::fclose(f);
                     }
-                } else if (e.arg == "orig") original = shown_original = true, flip = 1, set_sound();  // at once
+                } else if (e.arg == "pause") { paused = true, options_open = false; picker = view->levels() > 0 && view->can_jump() ? view->level(*spec) : -1; }
+                else if (e.arg == "resume") paused = false;
+                else if (e.arg.rfind("mouse", 0) == 0 && e.arg.find(',') != std::string::npos) {
+                    size_t comma = e.arg.find(',');
+                    script_held.mouse = true;
+                    script_held.pointer = {std::stof(e.arg.substr(5, comma - 5)), std::stof(e.arg.substr(comma + 1))};
+                } else if (e.arg == "nomouse") script_held.mouse = false;
+                else if (e.arg == "orig") original = shown_original = true, flip = 1, set_sound();  // at once
                 else if (e.arg == "hd") original = shown_original = false, flip = 1, set_sound();
                 else if (e.arg == "r") toggle_view();  // as the key: the dissolve
                 else if (e.arg.rfind("key", 0) == 0 && e.arg.size() == 4) {  // a game option key, e.g. keyl
@@ -469,6 +527,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             if (quit || next_event == script.size()) break;
             view->input(*spec, controls_of(script_held));
             frame();
+            if (view->take_options()) paused = options_open = true, picker = -1;
             if (flip < 1) flip = std::min(1.0f, flip + 1.0f / (FLIP_SECONDS * float(Spectrum::FRAME_HZ)));
             if (spec->frames() % 25 == 0) {  // keep the window alive (and showing something)
                 render();
@@ -497,13 +556,15 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                 std::snprintf(buf, sizeof buf, "SCREEN %d", picker + 1);
                 toast(buf);
                 paused = false;
-            } else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) || pad.pressed(Pad::START))
+            } else if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) || pad.pressed(Pad::START) ||
+                       IsMouseButtonPressed(MOUSE_BUTTON_RIGHT))
                 paused = false;
             if (IsKeyPressed(KEY_R)) toggle_view();
             for (int k = KEY_A; k <= KEY_Z; k++)  // the game's options (the runner's own letters aside)
-                if (k != KEY_R && k != KEY_M && k != KEY_F && k != KEY_X && IsKeyPressed(k))
+                if (k != KEY_R && k != KEY_M && k != KEY_N && k != KEY_F && k != KEY_X && IsKeyPressed(k))
                     if (std::string m = view->on_key(*spec, k); !m.empty()) toast(m);
-            if (IsKeyPressed(KEY_M) && audio) audio->toggle_mute();
+            if (IsKeyPressed(KEY_M)) music_on = !music_on, toast(music_on ? "MUSIC: ON" : "MUSIC: OFF");
+            if (IsKeyPressed(KEY_N)) effects_on = !effects_on, toast(effects_on ? "SOUND EFFECTS: ON" : "SOUND EFFECTS: OFF");
             if (IsKeyPressed(KEY_F)) ToggleBorderlessWindowed();
             if (IsKeyPressed(KEY_X) || pad.pressed(Pad::SELECT)) {
                 exit = GameExit::Back;
@@ -513,12 +574,16 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                 acc = 0;
                 if (audio) audio->clear();
             }
-        } else if (IsKeyPressed(KEY_ESCAPE) || pad.pressed(Pad::START)) {
-            paused = true;
+        } else if (IsKeyPressed(KEY_ESCAPE) || pad.pressed(Pad::START) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
+            paused = true, options_open = false;
             picker = view->levels() > 0 && view->can_jump() ? view->level(*spec) : -1;
             view->input(*spec, Controls{});  // let go of everything
         } else if (IsKeyPressed(KEY_R) && view->letters_free()) {
             toggle_view();  // the game reads no letters now: R is the remake's
+        } else if (IsKeyPressed(KEY_M) && view->letters_free()) {
+            music_on = !music_on, toast(music_on ? "MUSIC: ON" : "MUSIC: OFF");
+        } else if (IsKeyPressed(KEY_N) && view->letters_free()) {
+            effects_on = !effects_on, toast(effects_on ? "SOUND EFFECTS: ON" : "SOUND EFFECTS: OFF");
         } else if (int k = GetKeyPressed(); k >= KEY_A && k <= KEY_Z && view->letters_free()) {
             if (std::string m = view->on_key(*spec, k); !m.empty()) toast(m);  // a game option
         } else {
@@ -530,17 +595,31 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             for (auto [b, bit] : DIRS)
                 if (pad.down(b)) h.pad_dirs |= bit;
             h.pa = pad.down(Pad::A), h.pb = pad.down(Pad::B), h.px = pad.down(Pad::X);
+            // the mouse takes over the steering once it moves or clicks, until a direction is held
+            Vector2 md = GetMouseDelta();
+            h.click = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+            if (std::fabs(md.x) + std::fabs(md.y) > 2 || IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) mouse_on = true;
+            float fit = std::min(float(GetScreenWidth()) / csize.x, float(GetScreenHeight()) / csize.y);
+            Vector2 m = GetMousePosition();
+            h.pointer = {(m.x - (GetScreenWidth() - csize.x * fit) / 2) / fit, (m.y - (GetScreenHeight() - csize.y * fit) / 2) / fit};
+            h.mouse = mouse_on;
             Controls c = controls_of(h);
+            if (c.dirs) mouse_on = false;
 
             acc += GetFrameTime();
             const double step = 1.0 / Spectrum::FRAME_HZ;
             for (int n = 0; acc >= step && n < 4; n++, acc -= step) {
                 view->input(*spec, c);
                 frame();
+                if (view->take_options()) {  // (the module waits for the keys to be let go after)
+                    paused = options_open = true, picker = -1;
+                    break;
+                }
             }
             if (acc > step) acc = 0;  // too far behind (e.g. the window was dragged): skip
         }
 
+        if (bool hide = mouse_on && !paused && view->hides_pointer(); hide != IsCursorHidden()) hide ? HideCursor() : ShowCursor();
         render();
         BeginDrawing();
         ClearBackground(BLACK);

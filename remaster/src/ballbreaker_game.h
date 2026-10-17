@@ -29,6 +29,9 @@
 #include "ballbreaker_hd.h"
 #include "ballbreaker_preview.h"
 #include "ballbreaker_paddle_motion.h"
+#include "ballbreaker_contact_motion.h"
+#include "ballbreaker_collision.h"
+#include <optional>
 #include "game.h"
 
 // Where things are in one of the Ball Breaker games: Ballbreaker II (notes/ballbreaker2.md) is the
@@ -59,6 +62,7 @@ struct BBGame {
     std::vector<std::vector<int>> rooms;  // the levels (1-based) in each room, A-G
     uint16_t instructions_entry = 0;  // automatic demonstration entry, when mapped
     BBTheme theme = BBTheme::Neon;    // the HD look to start with (T changes it)
+    uint16_t bat_move = 0;            // the bat's step (LD HL,0x8061; C: the directions held), 0: none
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -74,6 +78,8 @@ public:
     void draw(const Spectrum&, bool original, double t) override;
 
     bool letters_free() const override { return mode_ != Mode::NameEntry; }
+    bool hides_pointer() const override { return mode_ == Mode::Play && !shown_original_; }
+    bool take_options() override { return std::exchange(options_taken_, false); }
     std::string on_key(Spectrum&, int key) override;
     int levels() const override { return g_.levels; }
     int level(const Spectrum& s) const override;
@@ -92,6 +98,10 @@ private:
     const BBGame& g_;
     int room_of(int level) const;
     bool hd_now(bool original) const;
+    // A game loaded from tape by its own loader starts in its menu, with no loading screen waiting
+    // for a key: the remake's title is shown first then, until a key (taken by it, not the menu)
+    bool title_hold_ = true;
+    bool title_now() const { return title_hold_ && mode_ == Mode::Menu && screen_ == BBMenu::Screen::Main; }
     BBState read_state(const Spectrum&) const;
 
     // Changed positions with their sample times. Render 40 ms behind simulation so
@@ -109,6 +119,19 @@ private:
 
     std::unique_ptr<BBRenderer> hd_;
     BBState state_, latest_;
+    BBPaddleBody modern_body(const Spectrum&) const;
+    void modern_step(Spectrum&, const zxc_regs_t&);
+    void modern_paddle_move(Spectrum&);
+    void publish_modern_hit(Spectrum&, BBPaddleHit, std::optional<uint64_t> tick = {});
+    BBPaddleHit resolve_modern_hit(Spectrum&, BBPaddleSweep, BBPaddleBody, float paddle_dx, bool step);
+    bool modern_was_falling_ = false, modern_episode_ = false;
+    std::optional<BBPaddleBody> modern_previous_body_;
+    std::optional<int> even_pending_paddle_centre_;
+    std::optional<BBPaddleHit> modern_pending_hit_;
+    std::optional<std::pair<uint64_t,uint64_t>> modern_event_clock_; // event id, machine tick
+    uint64_t modern_last_ball_tick_=0,modern_last_contact_tick_=0;
+    std::optional<std::pair<float,uint64_t>> even_previous_paddle_clock_;
+    std::optional<std::pair<float,uint64_t>> even_paddle_clock_; // native left, machine tick
     BBPaddleHit paddle_hit_;
     uint64_t paddle_hit_id_ = 0, sounded_paddle_hit_ = 0;
     std::map<int, Track> tracks_;
@@ -146,8 +169,8 @@ private:
     std::map<int, Glide> glides_;
     BBOriginalPreview preview_;
     BBPaddleMotion paddle_motion_;
-    uint64_t paddle_motion_hit_ = 0;
-    bool preview_enabled_ = false;  // explicit BB_ORIGINAL_PREVIEW opt-in, never the default
+    BBContactMotion contact_motion_;
+    bool preview_enabled_ = false;  // BB1 presentation; BB_ORIGINAL_PREVIEW=0 opts out
     bool original_speed_ = false;  // option O: the original's own pace (its slowdowns, its ball clock), no pacing
     bool unlimited_lives_ = false, unlimited_missiles_ = false;  // options (L, K); off = the original  // a jump asked for: done as the CPU gets to the next play pass
     int gain_ = 0;           // score gained lately, for the next burst's "+points"
@@ -164,9 +187,14 @@ private:
     bool wait_release_ = false;  // a new page: keys held from the last one don't count
     int cursor_ = 0;                                // main menu item, as last seen
     int menu_dir_ = 0, menu_held_ = 0;              // the arrow menu: the direction held, for how many frames
+    // the remake's own item under the game's last (HD): OPTIONS, the remake's settings
+    bool options_on_ = false, options_taken_ = false;  // under the bar; chosen
+    uint8_t menu_dirs_ = 0;                            // the directions held last frame
     uint64_t screen_since_ = 0;                     // frame the screen came up
     uint64_t left_menu_ = 0;                        // frame + 1 PLAY GAME was taken (the menu's wipe)
     uint64_t slide_start_ = 0;                      // frame + 1 the level card's room started coming in
+    int seen_level_ = -1;                           // the level number last frame
+    uint64_t level_changed_ = 0;                    // frame + 1 it changed (its card until play is back)
     bool slide_armed_ = false;                      // the card's playfield seen blank (the menu's gone)
     std::set<int> seen_slots_;                      // the bricks of the last frame
     std::map<int, double> drops_;                   // bricks dropping in: when each starts its fall
@@ -187,4 +215,11 @@ private:
     bool had_bricks_ = false, advance_ = false;  // a level's bricks seen; the next level asked for
     double cleared_t_ = -1;                      // when the last brick's explosion ended  // a new game: the tune from the top
     void read_menu(const Spectrum&, BBMenu&) const;
+    // The mouse: the bat is steered to the point of its rail nearest the pointer (the joystick held
+    // that way until it is there, so it keeps the original's speed); the HD view marks that point
+    bool shown_original_ = false;  // the R view (the pointer is the system's there)
+    float aim_ = -1;               // the bat centre's X the mouse asks for (-1: not steering)
+    bool fast_mouse_ = false;      // option U (a cheat): the bat keeps up with the mouse
+    int bat_last_ = -1, bat_step_ = 2;  // the bat centre last frame, its last move
+    float rail_x(const Spectrum&, Vector2 pointer) const;
 };

@@ -1,6 +1,6 @@
 #pragma once
 
-// Opt-in presentation experiment. Never writes to the authoritative Spectrum.
+// BB1 Original-speed presentation. Never writes to the authoritative Spectrum.
 #include "ballbreaker_hd.h"
 #include "spectrum.h"
 #include <algorithm>
@@ -127,7 +127,22 @@ public:
         const uint64_t forecast_tick=forecast->cpu_ticks();
         bool stopped=false;
         const int dx=int8_t(live.peek(0x8067)), dz=int8_t(live.peek(0x8066));
-        forecast->on_exec(paddle_hit,[&](const zxc_regs_t&){stopped=true;});
+        forecast->on_exec(paddle_hit,[&](const zxc_regs_t&) {
+            if(stopped) return;
+            // The native collision test accepts a centre already past the face.
+            // End this conditional approach on the face instead of publishing
+            // those penetrating microsteps. No outgoing step or event is shown.
+            const float face=float(forecast->peek(0x8062))+5;
+            // New input can turn a predicted miss into a catch. If the picture
+            // already passed the face, do not pull it back on speculation; only
+            // the live contact may correct that now-invalid approach.
+            if(had && old.z<face) { stopped=true; return; }
+            while(!path_.empty() && !path_.back().anchor && path_.back().ball.z<=face)
+                path_.pop_back();
+            append(path_,{t+double(forecast->cpu_ticks()-forecast_tick)/hz,
+                          physical(forecast->peek(0x8064),forecast->peek(0x8062)),false});
+            stopped=true;
+        });
         forecast->on_exec(0x886b,[&](const zxc_regs_t&) {
             if(stopped) return;
             if(forecast->peek(0x807a) || forecast->peek(0x809a) ||

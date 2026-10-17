@@ -56,6 +56,8 @@ int main(void) {
     for (int frame = 0; frame < 1000; frame++) {
         zxc_run_frame(paced);
         zxc_run_frame(normal);
+        assert(zxc_video_ticks(paced) == (uint64_t)(frame + 1) * 70000);
+        assert(zxc_video_ticks(paced) == zxc_video_ticks(normal));
         assert(boundaries == frame + 1);
         assert(zxc_peek(paced, 0x9000) == (uint8_t)frame);
         paced_audio += zxc_audio(paced, samples, 4096);
@@ -72,6 +74,7 @@ int main(void) {
     uint64_t before = zxc_cpu_ticks(paced);
     zxc_run_frame(paced);
     assert(zxc_cpu_ticks(paced) - before == 16 * 70000);
+    assert(zxc_video_ticks(paced) == 1001ULL * 70000);
     zxc_destroy(paced);
     zxc_destroy(normal);
     puts("PASS: one pass/frame, CPU resumes correctly, peripheral/audio clocks continue, pacing releases");

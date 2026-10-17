@@ -48,8 +48,11 @@ int main(int argc,char**argv) {
  baseline.preview_enabled_=false;preview.preview_enabled_=true;
  baseline.unlimited_lives_=preview.unlimited_lives_=true;
  int frame=0,dir=0,failures=0,checks=0,last_direction=0,backsteps=0;
+ double transition_step=0,baseline_transition_step=0,transition_delta=0,baseline_transition_delta=0,last_step=0,last_base_step=0;
+ double all_step=0,all_step_t=0;
  float maximum_lag=0;double previous=0,previous_base=0;bool have=false;
  std::vector<double> speeds,old_speeds;
+ int far_checks=0;
  for(int tick=1;tick<=1200;++tick) {
   double t=tick/60.;
   while((frame+1)/50.<=t+1e-8) {
@@ -78,21 +81,54 @@ int main(int argc,char**argv) {
   baseline.smooth_apply(old,t);preview.smooth_apply(st,t);
   auto get=[](const BBState&s)->const BBObject*{for(const auto&o:s.objects)if(o.slot==1)return &o;return nullptr;};
   const auto* p=get(st);const auto* q=get(old);if(!p||!q)continue;
-  if(!even && have && !dir && last_direction && (p->x-previous)*last_direction < -.001) ++backsteps;
+  if(have && !dir && last_direction && (p->x-previous)*last_direction < -.001) ++backsteps;
   if(dir)last_direction=dir;
-  if(even && (p->x!=q->x || p->sx!=q->sx || p->sy!=q->sy))++failures;
+  BBObject even_ball{},even_bat{};
+  if(even && (!preview.contact_motion_.at(t-BB_RENDER_DELAY,even_ball,even_bat) || even_ball.z-5>=40)) {
+   if(p->x!=q->x || p->sx!=q->sx || p->sy!=q->sy)++failures;
+   for(const auto& ball:st.objects)if(ball.slot==0)
+    for(const auto& before:old.objects)if(before.slot==0 &&
+      (ball.x!=before.x || ball.z!=before.z || ball.sx!=before.sx || ball.sy!=before.sy))++failures;
+   ++far_checks;
+  }
+  if(even && !preview.preview_.path_.empty())++failures;
   if(!even && preview.paddle_motion_.valid() &&
      (p->x<-.001 || p->x>96-p->bat_width+.001 ||
       !std::isfinite(p->x)))++failures;
-  maximum_lag=std::max(maximum_lag,std::abs(p->x-(b->peek(0x8061)-b->peek(0x8063)/2)));
+  maximum_lag=std::max(maximum_lag,std::abs(p->x-(even ? bb_even_paddle_left(b->peek(0x8061),b->peek(0x8063)) : float(b->peek(0x8061)-b->peek(0x8063)/2))));
+  BBObject confirmed_ball{},confirmed_bat{};
+  if(!even && preview.paddle_motion_.valid() &&
+     (!preview.contact_motion_.at(t-BB_RENDER_DELAY,confirmed_ball,confirmed_bat) || confirmed_ball.z-5>=40)) {
+   if(std::abs(p->x-preview.paddle_motion_.at(t))>.001)++failures;
+   ++far_checks;
+  }
   if(have && dir && t>10 && t<15 && p->x>10 && p->x<75 && q->x>10 && q->x<75) {
    speeds.push_back((p->x-previous)*60*dir);old_speeds.push_back((q->x-previous_base)*60*dir);
   }
+  double step=p->x-previous,base_step=q->x-previous_base;
+  if(even && have && t>10 && std::abs(step)<12 && std::abs(step)>all_step) {all_step=std::abs(step);all_step_t=t;}
+  if(even && have && preview.contact_motion_.at(t-BB_RENDER_DELAY,even_ball,even_bat) && even_ball.z-5>=8 && even_ball.z-5<=16) {
+   transition_step=std::max(transition_step,std::abs(step));
+   baseline_transition_step=std::max(baseline_transition_step,std::abs(base_step));
+   transition_delta=std::max(transition_delta,std::abs(step-last_step));
+   baseline_transition_delta=std::max(baseline_transition_delta,std::abs(base_step-last_base_step));
+  }
+  last_step=step;last_base_step=base_step;
   previous=p->x;previous_base=q->x;have=true;
  }
  auto sd=[](const auto&v){double mean=std::accumulate(v.begin(),v.end(),0.0)/v.size(),sq=0;for(double x:v)sq+=(x-mean)*(x-mean);return std::sqrt(sq/v.size());};
  if(backsteps) {std::fprintf(stderr,"FAIL %d backwards samples after release\n",backsteps);++failures;}
- if(speeds.empty() || (!even && (!checks || sd(speeds)>sd(old_speeds)*.65)))++failures;
+ // Near contact the paired confirmed trajectory deliberately replaces averaging.
+ // Require the original averaging filter to remain exact away from contact.
+ if(speeds.empty() || (!even && (!checks || sd(speeds)>=sd(old_speeds))))++failures;
+ if(!far_checks)++failures;
+ if(even && (transition_step>2.001 || all_step>2.001 || sd(speeds)>sd(old_speeds)*1.2)) {
+  fprintf(stderr,"FAIL Even contact smoothing: max step %.3f, speed SD %.3f vs %.3f\n",transition_step,sd(speeds),sd(old_speeds));
+  ++failures;
+ }
+ printf("unchanged filter away from contact: %d checks\n",far_checks);
  std::printf("%s: speed std %.3f -> %.3f; input checks %d; maximum lag %.3f units; failures %d\n",even?"even":"original",sd(old_speeds),sd(speeds),checks,maximum_lag,failures);
+ if(even)printf("contact-window max step baseline %.3f paired %.3f; max step change baseline %.3f paired %.3f\n",baseline_transition_step,transition_step,baseline_transition_delta,transition_delta);
+ if(even)printf("largest paddle step throughout play %.3f at %.5f\n",all_step,all_step_t);
  CloseWindow();return failures?1:0;
 }

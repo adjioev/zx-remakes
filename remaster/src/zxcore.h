@@ -73,6 +73,8 @@ void zxc_jump_at(zxc_t* zx, uint16_t at_pc, uint16_t to_pc, uint16_t sp);
 void zxc_ay_regs(const zxc_t* zx, uint8_t out[16]);
 // CPU T-states run so far (turbo included).
 uint64_t zxc_cpu_ticks(const zxc_t* zx);
+// Machine T-states: advance through parked CPU time, exclude turbo-only steps.
+uint64_t zxc_video_ticks(const zxc_t* zx);
 
 // Keyboard matrix key, by the chips code: ' ' space, 0x0D enter, 'a'-'z', '0'-'9',
 // 0x0E caps shift, 0x0F symbol shift.

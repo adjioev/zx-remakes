@@ -37,10 +37,7 @@ int main(int argc, char** argv) {
         view.set_remake(true);
         int hits = 0, hit_sounds = 0;
         double contact_t = -1;
-        s->on_exec(0x8A73, [&](const zxc_regs_t&) {
-            ++hits;
-            contact_t = double(s->frames() + 1) / 50;
-        });
+        uint64_t last_hit = 0;
         bool checked = false, checked_early = false;
         for (int frame = 0; frame < 450; ++frame) {
             Controls c;
@@ -50,6 +47,10 @@ int main(int argc, char** argv) {
             view.input(*s, c);
             s->run_frame();
             view.after_frame(*s);
+            if (view.paddle_hit_.id && view.paddle_hit_.id != last_hit) {
+                last_hit = view.paddle_hit_.id; ++hits;
+                contact_t = view.paddle_hit_.t;
+            }
             double t = double(s->frames()) / 50;
             view.prepare(*s, false, t);
             std::vector<SfxEvent> sounds;
@@ -57,7 +58,7 @@ int main(int argc, char** argv) {
             for (auto e : sounds) if (e.kind == Sfx::BatHit) ++hit_sounds;
             // The real shallow hit used to flip the ball over the paddle's end
             // at 8.68 s, while the sphere still overlapped its physical bounds.
-            if (frame >= 432 && frame <= 435) {
+            if (hits && t >= contact_t + BB_RENDER_DELAY && t <= contact_t + BB_RENDER_DELAY + .06) {
                 for (auto theme : {BBTheme::ClassicHD, BBTheme::Neon}) {
                     view.hd_->set_theme(theme);
                     auto order = view.hd_->scene_order(view.state_);
@@ -77,14 +78,14 @@ int main(int argc, char** argv) {
                 auto bat = std::find_if(state.objects.begin(), state.objects.end(), [](auto o) { return o.slot == 1; });
                 check(bat != state.objects.end(), "paddle exists at contact");
                 if (bat != state.objects.end()) {
-                    check(bat->x == s->peek(0x8061) - s->peek(0x8063)/2, "paddle uses collision X, not sprite-sort X");
+                    check(bat->x == s->peek(0x8061) - s->peek(0x8063)/2 - (view.original_speed_ ? 0 : std::min(3,int(s->peek(0x8063))/2)), "paddle uses collision X, not sprite-sort X");
                     check(bat->z == s->peek(0x8062), "paddle uses collision Z");
                     auto body = view.hd_->bat_body(*bat);
                     check(body.z1 == s->peek(0x8062), "paddle face stays at the original sprite Z");
                     check(body.z0 >= 0, "whole paddle base stays inside the room");
-                    check(160 + body.x0 - body.z1 == bat->sx,
+                    check(160 + body.x0 - bat->bat_inset - body.z1 == bat->sx,
                           "paddle play-side corner matches original sprite X");
-                    check(body.x1 - body.x0 == s->peek(0x8063), "drawn width is the collision width");
+                    check(body.x1 - body.x0 == s->peek(0x8063) - 3, "drawn width accounts for native asymmetric tolerance");
                 }
                 check(view.hd_->bat_waves_.size() == 1, "one flash for the real shallow-angle paddle hit");
                 check(hit_sounds == 1, "one sound at the delayed contact");
@@ -102,7 +103,7 @@ int main(int argc, char** argv) {
         check(hit_sounds == 1, "direction heuristic does not add a second paddle sound");
         // The original clips sprite-sort X near the left end of the rail. Physical
         // bounds must still come from the collision variables for every bat size.
-        for (int width : {8, 12, 16}) for (int centre : {width/2, 28, 80}) {
+        for (int width : {4, 6, 8, 12, 16}) for (int centre : {width/2, 28, 80}) {
             s->poke(0x8061, uint8_t(centre));
             s->poke(0x8063, uint8_t(width));
             s->poke(0xF3FC, uint8_t(std::max(0, centre - width/2 - 7)));
@@ -111,7 +112,7 @@ int main(int argc, char** argv) {
             check(bat != state.objects.end(), "paddle exists for width/end-of-rail check");
             if (bat == state.objects.end()) continue;
             const auto body = view.hd_->bat_body(*bat);
-            check(body.x0 == centre - width/2 && body.x1 == centre + width/2,
+            check(body.x0 == centre - width/2 + (view.original_speed_ ? 3 : 0) && body.x1 == centre + width/2 - (view.original_speed_ ? 0 : std::min(3, width/2)),
                   "all paddle widths and rail positions match the game's collision interval");
         }
         // Missing objects and genuinely foreground/airborne balls must still work.

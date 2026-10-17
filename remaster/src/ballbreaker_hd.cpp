@@ -14,7 +14,7 @@ constexpr int SPRITES = 60, SPRITE_W = 24, SPRITE_H = 20, SPRITE_BYTES = 120;
 constexpr float CUBE = 12;
 constexpr float CREATURE_PAD = 3;  // sprite pixels around each painted creature frame (tools/bb_creatures.py)
 constexpr float WALL_H = 64, LIP = 8;
-constexpr float ROOM_X = 92, ROOM_Z = 148;  // the original's room: back wall at X = 92, left wall at Z = 148
+constexpr float ROOM_X = BB_ROOM_WIDTH, ROOM_Z = 148;  // the original's room: back wall at X = 92, left wall at Z = 148
 // this level's: some levels have bricks set into a wall (the original's flat sprites just cover
 // it); the walls move out to them, so they stand against the wall (BBRenderer::prepare)
 float FLOOR_X = ROOM_X, FLOOR_Z = ROOM_Z;
@@ -825,6 +825,27 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
         break;
     }
     }
+    // the bat's mark ahead (shade_, from prepare): the lower part of the face that looks at the bat,
+    // over the bat's width; on a pyramid its slanting face, on the wire cube the plane of its front
+    if (!glow) {
+        if (auto it = shade_.find(o.slot); it != shade_.end()) {
+            const float xa = std::max(x0, it->second.x0), xb = std::min(x1, it->second.x1), h = CUBE * 0.55f;
+            // the light of the bat's lane on the floor (bat_lane), carried on to the brick it meets
+            const Color tone = classic() ? Color{255, 250, 225, 255} : Color{150, 230, 255, 255};
+            const Color dark = Fade(tone, classic() ? 0.28f : 0.25f), none = Fade(tone, 0);
+            if (xb > xa) {
+                if (k.shape == Shape::Pyramid) {  // the face from (x0..x1, y0, z0) up to the apex (xm, y1, zm)
+                    auto on = [&](float x, float v) {  // a point of the face at height v, x squeezed towards xm
+                        float f = v / CUBE;
+                        return P(xm + (x - xm) * (1 - f), y0 + v, z0 + (zm - z0) * f);
+                    };
+                    quad_grad(on(xa, 0), on(xb, 0), on(xb, h), on(xa, h), dark, dark, none, none);
+                } else {
+                    quad_grad(P(xa, y0, z0), P(xb, y0, z0), P(xb, y0 + h, z0), P(xa, y0 + h, z0), dark, dark, none, none);
+                }
+            }
+        }
+    }
     if (glow || o.slot < 3) return;
     const Color ink = classic() ? Color{24, 33, 48, 255} : Color{255, 240, 190, 255};
     auto decal = [&](float u, float v) {
@@ -897,7 +918,8 @@ BBRenderer::BatShape BBRenderer::bat_shape(int sprite) const {
 
 BBRenderer::BatBody BBRenderer::bat_body(const BBObject& o) const {
     const BatShape shape = bat_shape(o.sprite);
-    return bb_paddle_body(o.x, o.bat_width > 0 ? o.bat_width : shape.dx, o.z, shape);
+    const float width = o.bat_width > 0 ? o.bat_width : shape.dx;
+    return bb_visible_paddle_body(o.x, width, o.z, o.bat_inset, shape);
 }
 
 void BBRenderer::bat_lane(const BBObject& o, double /*t*/, bool glow) {
@@ -915,6 +937,17 @@ void BBRenderer::bat_lane(const BBObject& o, double /*t*/, bool glow) {
     const Color tick = classic() ? Color{42, 57, 72, 180} : Fade(light, 0.32f);
     for (float x : {x0, x1})
         line(P(x, 0, FLOOR_Z), P(x, 3, FLOOR_Z), classic() ? 2.0f : 1.2f, tick);
+}
+
+void BBRenderer::aim_mark(const BBObject& o, float x, bool glow) {
+    // a small diamond on the floor just ahead of the bat's striking edge, in the lane's light
+    if (glow) return;
+    const BatBody b = bat_body(o);
+    const Color light = classic() ? Color{60, 76, 96, 255} : Color{150, 230, 255, 255};
+    const Color c = Fade(light, classic() ? 0.75f : 0.6f);
+    const float z = b.z1 + 9, r = 2.4f;
+    Vector2 n = P(x, 0, z - r), e = P(x + r, 0, z), sth = P(x, 0, z + r), w = P(x - r, 0, z);
+    for (auto [p, q] : {std::pair{n, e}, {e, sth}, {sth, w}, {w, n}}) line(p, q, 2.0f, c);
 }
 
 void BBRenderer::bat(const BBObject& o, double t, bool glow) {
@@ -961,6 +994,13 @@ void BBRenderer::bat(const BBObject& o, double t, bool glow) {
     // hits: a flash where the ball struck, a pulse running out to both ends along the edge
     for (const BatWave& wv : bat_waves_) {
         float a = 1 - wv.life / 0.35f, spread = 0.08f + wv.life * 3.2f;
+        if (wv.geometric) {
+            // Modern contacts include the side faces. Keep the spark on the
+            // touched surface instead of falsely flashing the top striking edge.
+            Vector2 hit = P(x0 + (x1 - x0) * wv.along, wv.y, wv.z);
+            DrawCircleV(hit, (glow ? 28 : 12) * a, Fade(Color{220, 245, 255, 255}, a));
+            continue;
+        }
         float s0 = std::clamp(wv.along - spread, 0.0f, 1.0f), s1 = std::clamp(wv.along + spread, 0.0f, 1.0f);
         Vector2 hit = P(x0 + c + (x1 - x0 - c) * wv.along, y1, z1 - c);
         line(P(x0 + c + (x1 - x0 - c) * s0, y1, z1 - c), P(x0 + c + (x1 - x0 - c) * s1, y1, z1 - c), glow ? 14 : 6,
@@ -1381,7 +1421,10 @@ void BBRenderer::scene(const BBState& s, double t, bool glow) {
             }
     floor_marks(t, glow);
     for (const auto& o : s.objects)
-        if (o.slot == 1) bat_lane(o, t, glow);
+        if (o.slot == 1) {
+            bat_lane(o, t, glow);
+            if (s.aim >= 0) aim_mark(o, s.aim, glow);
+        }
     const auto order = scene_order(s);
     for (const BBObject* o : order) {
         if (o->slot == 0) ball(*o, t, glow);
@@ -1500,6 +1543,29 @@ void BBRenderer::prepare(const BBState& s, double t) {
     const float elapsed = last_t_ < 0 ? 0 : float(std::max(0.0, t - last_t_));
     float dt = std::min(elapsed, 0.1f);
     last_t_ = t;
+    // the bat's shadow ahead: a missile flies straight along Z on the floor from the bat and hits the
+    // first floor brick in its way. The bat's width cast forward onto those bricks, on the face that
+    // looks at the bat, shows where shots go: over the bat's X range, in thin steps, the nearest
+    // floor brick of each step takes that piece (two bricks may share it)
+    shade_.clear();
+    {
+        const BBObject* bat = nullptr;
+        for (const auto& o : s.objects)
+            if (o.slot == 1) bat = &o;
+        if (bat) {
+            const BatBody body = bat_body(*bat);
+            for (float x = body.x0 + 0.125f; x < body.x1; x += 0.25f) {
+                const BBObject* hit = nullptr;
+                for (const auto& o : s.objects)
+                    if (o.slot >= 3 && o.y < 1 && !(o.sprite >= 0x11 && o.sprite <= 0x1f) && x >= o.x && x < o.x + CUBE &&
+                        o.z - CUBE >= body.z1 - 0.5f && (!hit || o.z < hit->z))
+                        hit = &o;
+                if (!hit) continue;
+                auto [it, fresh] = shade_.try_emplace(hit->slot, Shade{x - 0.125f, x + 0.125f});
+                if (!fresh) it->second.x0 = std::min(it->second.x0, x - 0.125f), it->second.x1 = std::max(it->second.x1, x + 0.125f);
+            }
+        }
+    }
     for (Shard& sh : shards_) {
         sh.life += dt;
         sh.p.x += sh.v.x * dt, sh.p.y += sh.v.y * dt;
@@ -1527,7 +1593,9 @@ void BBRenderer::prepare(const BBState& s, double t) {
         shown_paddle_hit_ = hit.id;
         float age = float(std::max(0.0, t - hit.t - s.render_delay));
         // Don't replay an old collision after returning from the original view.
-        if (b && age < 0.35f) bat_waves_.push_back({hit.along, age});
+        if (b && age < 0.35f)
+            bat_waves_.push_back({hit.along, age, hit.geometric, hit.y,
+                                  hit.z - BB_BALL_RADIUS * hit.nz});
     }
     // Confirmed paddle contacts have their own effect; the velocity heuristic is
     // only for other bounces, and must not add a second flash as the ball leaves.
@@ -1608,7 +1676,7 @@ void BBRenderer::draw(const BBState& s, double t) {
 // they are drawn here over a dimmed room.
 
 namespace {
-const char* MENU_ITEMS[6] = {"PLAY GAME", "CONTROLS", "KEYS", "HI-SCORES", "INSTRUCTIONS", "SOUND FX"};
+const char* MENU_ITEMS[7] = {"PLAY GAME", "CONTROLS", "KEYS", "HI-SCORES", "INSTRUCTIONS", "SOUND FX", "OPTIONS"};
 constexpr Color MENU_GOLD{255, 214, 120, 255}, MENU_LILAC{205, 170, 255, 255}, MENU_DIM{150, 120, 200, 255};
 }  // namespace
 
@@ -1691,8 +1759,8 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
     auto title = [&](const char* s2) { text(s2, {W / 2.0f, 320}, 64, MENU_GOLD); };
     switch (m.screen) {
     case Sc::Main: {
-        for (int i = 0; i < 6; i++) {
-            float y = 400 + i * 88.0f, cx = W / 2.0f + (i % 2 ? 1 : -1) * gone * W * 0.75f;
+        for (int i = 0; i < 7; i++) {  // the game's six, and the remake's OPTIONS
+            float y = 390 + i * 78.0f, cx = W / 2.0f + (i % 2 ? 1 : -1) * gone * W * 0.75f;
             bool on = i == m.cursor;
             if (on) {
                 float wpx = 640, hpx = 72;
@@ -1700,12 +1768,15 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
                 if (!glow) DrawRectangleRounded(bar, 0.4f, 8, Fade(Color{120, 60, 220, 255}, 0.35f * fade));
                 DrawRectangleRoundedLinesEx(bar, 0.4f, 8, glow ? 6 : 3, Fade(scale(Color{230, 170, 255, 255}, pulse), fade));
             }
-            text(MENU_ITEMS[i], {cx, y}, on ? 50 : 42, Fade(on ? WHITE : (glow ? Fade(MENU_DIM, 0.4f) : MENU_DIM), fade));
+            // the original's last item names what it would switch to (SOUND FX / MUSIC): here, what it
+            // does now (the remake's own effects sound either way: it is the tune in play, on or off)
+            const char* item = i == 5 ? (m.sound_fx ? "IN-GAME MUSIC:  OFF" : "IN-GAME MUSIC:  ON") : MENU_ITEMS[i];
+            text(item, {cx, y}, on ? 50 : 42, Fade(on ? WHITE : (glow ? Fade(MENU_DIM, 0.4f) : MENU_DIM), fade));
         }
         if (!glow && gone == 0)
             text("Programming Richard Taylor    Graphics Jon Law    Design Clement Chambers    Sound Jay Derrett",
                  {W / 2.0f, H - 110.0f}, 24, Fade(MENU_LILAC, 0.6f));
-        if (gone == 0) footer("UP / DOWN  choose      ENTER  select      ESC  pause");
+        if (gone == 0) footer("UP / DOWN  choose      ENTER  select      ESC  options");
         break;
     }
     case Sc::Controls: {
@@ -1725,10 +1796,10 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
     case Sc::Keys: {
         title("REMAKE KEYS");
         const char* rows[][2] = {{"R  /  TAB", "original 1987  /  remastered"},
-                                 {"L", "unlimited lives"},
-                                 {"K", "unlimited missiles"},
+                                 {"L", "unlimited lives + missiles"},
                                  {"O", "original speed (slowdowns) / even"},
                                  {"T", "HD theme"},
+                                 {"M  /  N", "music  /  sound effects  on / off"},
                                  {"ESC", "pause: jump to a level, sound, quit"},
                                  {"F11", "full screen"}};
         const int n = int(sizeof rows / sizeof rows[0]);

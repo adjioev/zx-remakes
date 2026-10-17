@@ -28,7 +28,7 @@ struct zxc {
     float turbo, turbo_acc;
     bool jump;
     uint16_t jump_at, jump_to, jump_sp;
-    uint64_t cpu_ticks;
+    uint64_t cpu_ticks, video_ticks;
     uint8_t* tape;  // the blocks, as in a .tap: [length word][flag, data..., checksum]
     uint16_t* pauses;  // ms of silence after each block
     size_t tape_size, tape_pos;  // tape_pos: the block being played / read next
@@ -410,6 +410,7 @@ void zxc_run_frame(zxc_t* zx) {
     const bool hooked = sys->debug.callback.func != 0;
     zx->yielded = false;
     for (uint32_t tick = 0; tick < num_ticks; tick++) {
+        zx->video_ticks++;
         if (zx->yielded) {
             pins = idle_tick(sys, pins);
             continue;
@@ -441,6 +442,7 @@ void zxc_set_turbo(zxc_t* zx, float factor) {
 }
 
 uint64_t zxc_cpu_ticks(const zxc_t* zx) { return zx->cpu_ticks; }
+uint64_t zxc_video_ticks(const zxc_t* zx) { return zx->video_ticks; }
 
 void zxc_ay_regs(const zxc_t* zx, uint8_t out[16]) {
     for (int i = 0; i < 16; i++) out[i] = zx->sys.type == ZX_TYPE_128 ? zx->sys.ay.reg[i] : 0;
@@ -448,7 +450,9 @@ void zxc_ay_regs(const zxc_t* zx, uint8_t out[16]) {
 
 void zxc_key(zxc_t* zx, int code, bool down) {
     // straight to the matrix: zx_key_down would turn space and the cursor keys into the
-    // Kempston joystick
+    // Kempston joystick. chips has CAPS SHIFT only as a modifier: 0x0E is it as a key of its own
+    // (column 0, line 0), registered here as a restored machine state brings its own key table
+    kbd_register_key(&zx->sys.kbd, 0x0E, 0, 0, 0);
     if (down) kbd_key_down(&zx->sys.kbd, code);
     else kbd_key_up(&zx->sys.kbd, code);
 }

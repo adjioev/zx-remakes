@@ -45,6 +45,7 @@ public:
     void set_turbo(float factor) { zxc_set_turbo(zx_, factor); }
     void yield_frame() { zxc_yield_frame(zx_); }
     uint64_t cpu_ticks() const { return zxc_cpu_ticks(zx_); }
+    uint64_t video_ticks() const { return zxc_video_ticks(zx_); }
     void ay_regs(uint8_t out[16]) const { zxc_ay_regs(zx_, out); }
     // When the CPU next gets to at_pc, continue at to_pc with SP = sp (see zxc_jump_at).
     void jump_at(uint16_t at_pc, uint16_t to_pc, uint16_t sp) { zxc_jump_at(zx_, at_pc, to_pc, sp); }

@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <random>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ struct BBObject {
     int slot;          // 0 ball, 1 bat, 2 missile, 3+ bricks
     float lift = -1;   // a double slab's upper plate, pixels above the lower one (smoothed; -1: from the sprite)
     float bat_width = 0;  // slot 1: collision width from 0x8063, not the sprite mask
+    float bat_inset = 0;  // BB1 asymmetric native lateral tolerance (+3 / -6)
 };
 
 // The double slab bricks bob their upper plate 0-5 pixels (one sprite per height); -1 for other sprites.
@@ -35,9 +37,10 @@ float slab_lift(int sprite);
 struct BBMenu {
     enum class Screen { None, Loading, Main, Controls, Keys, HiScores, Instructions, LevelCard };
     Screen screen = Screen::None;
-    int cursor = 0;  // main menu item 0-5
+    int cursor = 0;  // main menu item 0-5, 6: the remake's OPTIONS
     std::string title = "BALL BREAKER", publisher = "CRL GROUP PLC 1987";  // the game's
     std::string level_name, designer;  // the level card's (Ballbreaker II), if the game has them
+    bool sound_fx = false;  // the game's own option: effects instead of its tune in play (0x8076 = 0)
     float slide = 1;  // the level card: the room coming in from the left as the original's (0 not yet, 1 in place)
     double since = 0;  // seconds this screen has been up
     float leave = 1;   // PLAY GAME taken: the main menu going (0 -> 1), as the original wipes it, then the card
@@ -64,6 +67,10 @@ struct BBPaddleHit {
     uint64_t id = 0;
     double t = -10;  // simulation time of the confirmed collision
     float along = 0;  // contact along the paddle, 0..1
+    bool geometric = false;
+    float x = 0, y = 4, z = 0;  // sphere centre at impact
+    float nx = 0, nz = 1;  // outward normal of the contacted surface
+    float bat_left = 0, bat_width = 0, bat_z = 7;  // paddle snapshot at impact
 };
 
 struct BBState {
@@ -75,6 +82,7 @@ struct BBState {
     std::vector<BBObject> objects;
     BBMenu menu;
     BBPaddleHit paddle_hit;
+    float aim = -1;  // where the mouse sends the bat's centre (X; -1: the mouse isn't steering)
 };
 
 enum class BBTheme { Neon, ClassicHD };
@@ -109,6 +117,10 @@ public:
 
 private:
     int room_level_ = -1;  // the level the room's size (its walls) is for
+    struct Shade {
+        float x0, x1;  // the X range of the bat's shadow on this brick
+    };
+    std::map<int, Shade> shade_;  // the bat's shadow ahead, on the floor bricks a missile would hit (prepare)
     BBTheme theme_ = BBTheme::Neon;
     bool classic() const { return theme_ == BBTheme::ClassicHD; }
     void scene(const BBState&, double t, bool glow_pass);
@@ -116,6 +128,7 @@ private:
     void brick(const BBObject&, double t, bool glow_pass);
     void bat(const BBObject&, double t, bool glow_pass);
     void bat_lane(const BBObject&, double t, bool glow_pass);  // the floor in front of the bat, lit
+    void aim_mark(const BBObject& bat, float x, bool glow_pass);  // where the mouse sends the bat
     void ball(const BBObject&, double t, bool glow_pass);
     void sprite(const BBObject&, Color tint, double t, bool glow_pass);  // the game's sprite as neon vectors
     void missile(const BBObject&, double t, bool glow_pass);
@@ -189,6 +202,8 @@ private:
     } ball_;
     struct BatWave {
         float along, life;  // where on the bat (0..1), seconds
+        bool geometric = false;
+        float y = 4, z = 0;
     };
     std::vector<BatWave> bat_waves_;
     // The bat's box, from its sprite (it changes with the "bat size" bricks): its length along

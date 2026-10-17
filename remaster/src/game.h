@@ -33,7 +33,10 @@ struct Controls {
     bool pad_b = false, pad_x = false;
     std::set<int> keys;     // the PC keyboard as the Spectrum's, held now (chips codes:
                             // letters, digits, ' ', 0x0D Enter, 0x0E CAPS, 0x0F SYMBOL SHIFT)
-    bool any() const { return dirs || fire || ok || pad_b || pad_x || !keys.empty(); }
+    bool mouse = false;          // the mouse steers: moved or clicked since the last direction key
+    Vector2 pointer{-1, -1};     // where it points, in canvas pixels
+    bool click = false;          // its left button, held
+    bool any() const { return dirs || fire || ok || pad_b || pad_x || click || !keys.empty(); }
 };
 
 class GameView {
@@ -51,6 +54,10 @@ public:
     virtual void after_frame(Spectrum&) {}
     // Before draw, outside the canvas: render offscreen layers (e.g. glow) here.
     virtual void prepare(const Spectrum&, bool /*original*/, double /*t*/) {}
+    // The module's own menu item OPTIONS was taken: the runner opens its options (the pause screen).
+    virtual bool take_options() { return false; }
+    // The module shows where the mouse aims itself now: the runner hides the system pointer.
+    virtual bool hides_pointer() const { return false; }
     // Size of the picture the module draws into (the runner fits it into the window).
     virtual Vector2 canvas_size() const { return {1920, 1536}; }
     // Draw the picture into the canvas (already the render target); original: the R view,
