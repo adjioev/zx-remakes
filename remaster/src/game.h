@@ -54,8 +54,14 @@ public:
     virtual void after_frame(Spectrum&) {}
     // Before draw, outside the canvas: render offscreen layers (e.g. glow) here.
     virtual void prepare(const Spectrum&, bool /*original*/, double /*t*/) {}
-    // The module's own menu item OPTIONS was taken: the runner opens its options (the pause screen).
+    // The module's own menu items, taken: OPTIONS (the runner opens its options, the pause screen),
+    // EXIT (back to the game list).
     virtual bool take_options() { return false; }
+    virtual bool take_exit() { return false; }
+    // Esc (gamepad Start, right click), the module first: Pause (in play), Options (the runner's
+    // options, from the game's menu), Done (the module took it, e.g. back from a menu page).
+    enum class Escape { Pause, Options, Done };
+    virtual Escape escape() { return Escape::Pause; }
     // The module shows where the mouse aims itself now: the runner hides the system pointer.
     virtual bool hides_pointer() const { return false; }
     // Size of the picture the module draws into (the runner fits it into the window).

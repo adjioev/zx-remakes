@@ -41,6 +41,7 @@ const BBGame BALL_BREAKER = {
     0xAE11,
     BBTheme::Neon,
     0x89D4,
+    0x8B92,
 };
 
 // Ballbreaker II (notes/ballbreaker2.md): its main menu moves an arrow; the item under it is at
@@ -63,6 +64,7 @@ const BBGame BALL_BREAKER_2 = {
     0,                   // instructions demonstration: not mapped
     BBTheme::ClassicHD,  // the sequel looks its own: solid, brighter (T: Neon)
     0x89F6,
+    0x8BB7,
 };
 
 namespace {
@@ -240,6 +242,13 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
     // the title picture: the game's own if it has one (assets/<key>/intro.png), else the shared one
     intro_path_ = FileExists((game_assets + "/intro.png").c_str()) ? game_assets + "/intro.png" : assets + "/intro.png";
     creatures_path_ = assets + "/creatures/frames.png";
+    // the hi-score table, kept between runs: <data>/<key>.hiscores (not for test runs)
+    if (!std::getenv("ZXREMAKES_TEST")) {
+        hiscores_file_ = user_data_dir("ZX Remakes") + game_assets.substr(game_assets.find_last_of('/') + 1) + ".hiscores";
+        std::ifstream in(hiscores_file_, std::ios::binary);
+        hiscores_saved_.assign(std::istreambuf_iterator<char>(in), {});
+        if (hiscores_saved_.size() != HISCORES_SIZE) hiscores_saved_.clear();
+    }
     s.on_exec(g_.ctrl_loop, [this](const zxc_regs_t&) { seen_ctrl_ = frame_ + 1; });
     s.on_exec(g_.keys_loop, [this](const zxc_regs_t&) { seen_keys_ = frame_ + 1; });
     s.on_exec(g_.page_loop, [this](const zxc_regs_t&) { seen_page_ = frame_ + 1; });
@@ -252,7 +261,8 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
         int c = g_.cursor_base == 0 ? int(r.af >> 8) : int(s.peek(g_.menu_cursor)) - g_.cursor_base;
         if (c >= 0 && c <= 5) cursor_ = c;
     });
-    if (g_.instructions_entry) s.on_exec(g_.instructions_entry, [this](const zxc_regs_t&) {
+    if (g_.instructions_entry) s.on_exec(g_.instructions_entry, [this](const zxc_regs_t& r) {
+        instructions_sp_ = r.sp;  // its return to the menu on top
         instructions_active_ = true;
         instructions_page_ = -1, instructions_dir_ = 0;
         left_menu_ = 0;
@@ -423,8 +433,10 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
         advance_ = false;
         sp->poke(PLAY_REASON, 1);
     });
+    if (g_.level_built) s.on_exec(g_.level_built, [this](const zxc_regs_t&) { building_ = false; });
     s.on_exec(g_.level_start, [this, sp](const zxc_regs_t&) {
         paddle_hit_ = {};
+        building_ = g_.level_built != 0;
         if (!remake_ || !g_.tune_start || sp->peek16(SCORE) != 0 || sp->peek(LEVEL) != 0) return;
         // as the player's own start of the tune does (g_.tune_start): its channels' data from the top
         const uint16_t v = g_.tune_vars;
@@ -478,6 +490,20 @@ void BallBreakerView::after_frame(Spectrum& s) {
     if (level_changed_ && seen_play_ > level_changed_ + 1) level_changed_ = 0;  // playing the new level
     else if (level_changed_ && mode_ == Mode::Play) screen_ = Sc::LevelCard;
     if (mode_ == Mode::Boot) title_hold_ = false;  // its own loading screen is the title
+    // the hi-scores kept: put back into the game the first time its menu is up, then (in the menu:
+    // a name typed in is done) written out whenever the table changes
+    if (!hiscores_file_.empty() && mode_ == Mode::Menu) {
+        if (!hiscores_restored_) {
+            for (size_t i = 0; i < hiscores_saved_.size(); i++) s.poke(uint16_t(g_.hiscores + i), hiscores_saved_[i]);
+            hiscores_restored_ = true;
+        }
+        std::vector<uint8_t> now(HISCORES_SIZE);
+        for (size_t i = 0; i < now.size(); i++) now[i] = s.peek(uint16_t(g_.hiscores + i));
+        if (now != hiscores_saved_) {
+            std::ofstream(hiscores_file_, std::ios::binary).write(reinterpret_cast<const char*>(now.data()), std::streamsize(now.size()));
+            hiscores_saved_ = std::move(now);
+        }
+    }
     if (screen_ != last_screen_) last_screen_ = screen_, screen_since_ = frame_;
     // the level card: the original slides the room in from the left (its far end first) once the
     // "SCREEN" text is gone; it has begun when the playfield's left column, blank under the text
@@ -574,17 +600,18 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         if (c.any()) keys.insert(' ');
         break;
     case Mode::Menu: {
-        // OPTIONS, the remake's item under the last: down from that one (a new press) and back up;
-        // the game sees none of it (it would wrap round, or take the item it has)
+        // OPTIONS and EXIT, the remake's items under the last: down from that one (a new press) and
+        // back up; the game sees none of it (it would wrap round, or take the item it has)
         const uint8_t pressed = uint8_t(c.dirs & ~menu_dirs_);
         menu_dirs_ = c.dirs;
-        if (screen_ != BBMenu::Screen::Main || shown_original_) options_on_ = false;
-        else if (options_on_) {
-            if (pressed & ZXC_JOY_UP) options_on_ = false, wait_release_ = true;  // (not on up again)
-            else if (c.ok || c.fire) options_taken_ = wait_release_ = true;
+        if (screen_ != BBMenu::Screen::Main || shown_original_) extra_ = 0;
+        else if (extra_) {
+            if (pressed & ZXC_JOY_UP) extra_--, wait_release_ = !extra_;  // (back on the game's: not up again)
+            else if (pressed & ZXC_JOY_DOWN) extra_ = 2;
+            else if (c.ok || c.fire) (extra_ == 1 ? options_taken_ : exit_taken_) = wait_release_ = true;
             break;
         } else if (cursor_ == 5 && (c.dirs & ZXC_JOY_DOWN)) {
-            if (pressed & ZXC_JOY_DOWN) options_on_ = true;
+            if (pressed & ZXC_JOY_DOWN) extra_ = 1;
             break;
         }
         if (g_.menu_pointer && screen_ == BBMenu::Screen::Main) {
@@ -608,6 +635,23 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         if (c.ok && !c.keys.count(' ')) keys.insert(0x0D);
         break;
     case Mode::Screen:  // a page waiting for any key
+        if (back_frames_ > 0 && instructions_active_ && instructions_sp_ && g_.instructions_entry == 0xAE11) {
+            // BB1's instructions take no key: they list the bricks (waiting at the HALT 0xAE2A between
+            // them), then play a demonstration. Esc while they list: back to the menu, as their end
+            // would be (their caller's return, the stack as it was: the menu calls them through
+            // CALL 0x9F6F, JP (HL), and goes on to redraw itself)
+            uint16_t back = s.peek16(instructions_sp_);
+            if (s.peek(uint16_t(back - 3)) == 0xCD) {
+                s.jump_at(0xAE2A, back, uint16_t(instructions_sp_ + 2));
+                back_frames_ = 0, instructions_sp_ = 0, wait_release_ = true;
+                break;
+            }
+        }
+        if (back_frames_ > 0) {  // Esc: its key, held long enough for the game to see it
+            if (--back_frames_ == 0) wait_release_ = true;
+            keys.insert(' ');
+            break;
+        }
         if (screen_ == BBMenu::Screen::Instructions) {
             int dir = bool(c.dirs & ZXC_JOY_RIGHT) - bool(c.dirs & ZXC_JOY_LEFT);
             if (dir && dir != instructions_dir_) {
@@ -643,6 +687,12 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
     }
     }
     apply(s, keys, joy);
+}
+
+GameView::Escape BallBreakerView::escape() {
+    if (mode_ == Mode::Screen) return back_frames_ = 6, Escape::Done;  // a menu page: back to the menu
+    if (mode_ == Mode::Menu && screen_ == BBMenu::Screen::Main && !title_now()) return Escape::Options;
+    return Escape::Pause;
 }
 
 float BallBreakerView::rail_x(const Spectrum& s, Vector2 p) const {
@@ -701,7 +751,7 @@ BBState BallBreakerView::read_state(const Spectrum& s) const {
     st.missiles = s.peek(MISSILES);
     st.lives = s.peek(g_.lives);
     st.unlimited_lives = unlimited_lives_, st.unlimited_missiles = unlimited_missiles_;
-    uint16_t end = s.peek16(OBJECTS_END);
+    uint16_t end = building_ ? OBJECTS : s.peek16(OBJECTS_END);
     int slot = 0;
     for (uint16_t a = OBJECTS; a + 10 <= end && slot < 200; a += 10, slot++) {
         BBObject o{float(s.peek(uint16_t(a + 1))), float(s.peek(uint16_t(a + 2))), s.peek(uint16_t(a + 3)),
@@ -739,7 +789,7 @@ bool BallBreakerView::hd_now(bool original) const {
 void BallBreakerView::read_menu(const Spectrum& s, BBMenu& m) const {
     m.screen = mode_ == Mode::Boot || title_now() ? BBMenu::Screen::Loading : screen_;
     if (mode_ == Mode::Play && seen_play_ && frame_ + 1 - seen_play_ < RECENT && !level_changed_) m.screen = BBMenu::Screen::None;
-    m.cursor = options_on_ ? 6 : cursor_;
+    m.cursor = extra_ ? 5 + extra_ : cursor_;
     m.instructions_auto = g_.instructions_entry != 0;
     m.instructions_page = instructions_page_;
     m.title = g_.title, m.publisher = g_.publisher;

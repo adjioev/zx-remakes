@@ -63,6 +63,9 @@ struct BBGame {
     uint16_t instructions_entry = 0;  // automatic demonstration entry, when mapped
     BBTheme theme = BBTheme::Neon;    // the HD look to start with (T changes it)
     uint16_t bat_move = 0;            // the bat's step (LD HL,0x8061; C: the directions held), 0: none
+    // level_start's return from building the level (its objects from 0xF409, the end at 0x804C):
+    // before it the object list is the old level's, or (BB2) its card's text buffer
+    uint16_t level_built = 0;
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -80,6 +83,8 @@ public:
     bool letters_free() const override { return mode_ != Mode::NameEntry; }
     bool hides_pointer() const override { return mode_ == Mode::Play && !shown_original_; }
     bool take_options() override { return std::exchange(options_taken_, false); }
+    bool take_exit() override { return std::exchange(exit_taken_, false); }
+    Escape escape() override;
     std::string on_key(Spectrum&, int key) override;
     int levels() const override { return g_.levels; }
     int level(const Spectrum& s) const override;
@@ -101,6 +106,10 @@ private:
     // A game loaded from tape by its own loader starts in its menu, with no loading screen waiting
     // for a key: the remake's title is shown first then, until a key (taken by it, not the menu)
     bool title_hold_ = true;
+    static constexpr size_t HISCORES_SIZE = 9 * 14;  // 9 x [12 name, word score / 100]
+    std::string hiscores_file_;                    // where they are kept ("": not kept)
+    std::vector<uint8_t> hiscores_saved_;          // as last read / written
+    bool hiscores_restored_ = false;
     bool title_now() const { return title_hold_ && mode_ == Mode::Menu && screen_ == BBMenu::Screen::Main; }
     BBState read_state(const Spectrum&) const;
 
@@ -147,6 +156,7 @@ private:
     double perf_t0_ = 0;
     bool paced_ = false;
     int pending_level_ = -1;
+    bool building_ = false;  // a level start before its objects are built: none are read
     bool bat_eaten_ = false;  // unlimited lives: the bat eaten up, the game told it was a lost ball
     uint16_t eater_ = 0;      // the object of the creature that landed on the bat
     // how far the picture runs behind the game: BB_RENDER_DELAY at the even pace; at the original's,
@@ -187,9 +197,12 @@ private:
     bool wait_release_ = false;  // a new page: keys held from the last one don't count
     int cursor_ = 0;                                // main menu item, as last seen
     int menu_dir_ = 0, menu_held_ = 0;              // the arrow menu: the direction held, for how many frames
-    // the remake's own item under the game's last (HD): OPTIONS, the remake's settings
-    bool options_on_ = false, options_taken_ = false;  // under the bar; chosen
+    // the remake's own items under the game's last (HD): OPTIONS (the remake's settings), EXIT
+    int extra_ = 0;                                    // the one under the bar (1, 2; 0: the game's)
+    bool options_taken_ = false, exit_taken_ = false;  // chosen
     uint8_t menu_dirs_ = 0;                            // the directions held last frame
+    int back_frames_ = 0;                              // Esc on a menu page: frames its "any key" is held
+    uint16_t instructions_sp_ = 0;                     // BB1's instructions: the stack as they began
     uint64_t screen_since_ = 0;                     // frame the screen came up
     uint64_t left_menu_ = 0;                        // frame + 1 PLAY GAME was taken (the menu's wipe)
     uint64_t slide_start_ = 0;                      // frame + 1 the level card's room started coming in

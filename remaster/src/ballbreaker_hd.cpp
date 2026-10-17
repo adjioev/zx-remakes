@@ -20,7 +20,7 @@ constexpr float ROOM_X = BB_ROOM_WIDTH, ROOM_Z = 148;  // HD room encloses the f
 float FLOOR_X = ROOM_X, FLOOR_Z = ROOM_Z;
 
 // What each sprite is (the bricks in the game's instructions), drawn as that shape in that colour.
-enum class Shape { Cube, Armored, Framed, LBlock, Pyramid, Diamond, Lying, Barrel, LifeBall, Wire, Prism, Ramp, Slabs };
+enum class Shape { Cube, Armored, Framed, Gate, Spinner, Pyramid, Diamond, Lying, Barrel, LifeBall, Wire, Prism, Ramp, Slabs };
 
 struct Kind {
     Shape shape;
@@ -37,7 +37,7 @@ Kind kind_of(int sprite) {
     case 0x04: case 0x31: case 0x32: case 0x33: case 0x3a:
         return {Shape::Pyramid, {255, 90, 220, 255}};                    // 200 points
     case 0x3b: return {Shape::Diamond, {255, 140, 240, 255}};
-    case 0x05: return {Shape::LBlock, {255, 150, 70, 255}};              // 400 points
+    case 0x05: return {Shape::Gate, {255, 150, 70, 255}};                // 400 points
     case 0x06: return {Shape::Barrel, {255, 70, 90, 255}};               // bomb
     case 0x07: case 0x22: return {Shape::Prism, {255, 220, 90, 255}};    // 500 points
     case 0x0d: case 0x23: return {Shape::Ramp, {140, 200, 255, 255}};
@@ -48,7 +48,7 @@ Kind kind_of(int sprite) {
         return {Shape::Slabs, {255, 120, 200, 255}};
     case 0x20: return {Shape::Armored, {120, 160, 190, 255}};             // bomb or missile
     case 0x35: case 0x36: case 0x37: case 0x38: case 0x39:
-        return {Shape::Framed, {120, 160, 255, 255}};
+        return {Shape::Spinner, {120, 160, 255, 255}};                   // a wall breathing in it
     case 0x00: return {Shape::Cube, {110, 80, 240, 255}};
     case 0x21: return {Shape::Cube, {120, 170, 255, 255}};
     case 0x25: return {Shape::Cube, {200, 110, 255, 255}};
@@ -721,10 +721,26 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
         edges({{a, b}, {b, cc}, {cc, d}, {d, a}, {h, e}, {e, f}, {f, g}, {g, h}}, scale(c, 0.8f));
         break;
     }
-    case Shape::LBlock:
-        box(x0, x1, y0, ym, z0, z1, c);
-        box(xm, x1, ym, y1, z0, z1, c);
+    case Shape::Gate: {  // a "П" lying flat: the bar at the back, the legs along the floor towards the bat
+        const float bar = 5, leg = 4;
+        box(x0, x1, y0, y1, z1 - bar, z1, c);  // far to near: the bar, the far leg, the near one
+        box(x1 - leg, x1, y0, y1, z0, z1 - bar, c);
+        box(x0, x0 + leg, y0, y1, z0, z1 - bar, c);
         break;
+    }
+    case Shape::Spinner: {
+        // an upturned arch (a "U": two sides and a floor, open towards the bat and up) with a wall at
+        // its back that breathes: the game plays 0x37 0x39 0x38 0x36 and back, the wall from full to
+        // a quarter (0x35: none)
+        const float t = 3;
+        static const float FILL[5] = {0, 0.25f, 1, 0.5f, 0.75f};  // 0x35..0x39
+        const float fill = FILL[std::clamp(o.sprite - 0x35, 0, 4)];
+        box(x0 + t, x1 - t, y0, y0 + t, z0, z1, c);  // the floor
+        if (fill > 0) box(x0 + t, x1 - t, y0 + t, y0 + t + (y1 - y0 - t) * fill, z1 - t, z1, c);  // the wall
+        box(x1 - t, x1, y0, y1, z0, z1, c);  // the far side, its inner face seen
+        box(x0, x0 + t, y0, y1, z0, z1, c);
+        break;
+    }
     case Shape::Slabs: {  // the upper plate bobs, as in the original
         float lift = o.lift >= 0 ? o.lift : std::max(slab_lift(o.sprite), 0.0f);
         box(x0, x1, y0, y0 + 4, z0, z1, c);
@@ -807,11 +823,43 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
             Vector2 dir{bc.x - fc.x, bc.y - fc.y};
             float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
             Vector2 n{-dir.y / len * r, dir.x / len * r};
-            quad({fc.x + n.x, fc.y + n.y}, {bc.x + n.x, bc.y + n.y}, {bc.x - n.x, bc.y - n.y}, {fc.x - n.x, fc.y - n.y}, fill(5));
-            DrawCircleV(bc, r, fill(5));
+            // the tube shaded round, lit from above (-n): strips across it, a highlight near the top
+            const Color body = fill(5);
+            auto shade = [&](float t) {  // t: -1 the upper edge .. 1 the lower
+                if (glow) return body;
+                float u = (t + 0.3f) / 1.3f, k = 0.45f + 0.75f * std::max(0.0f, 1 - u * u);
+                Color out = scale(body, k);
+                float hl = std::max(0.0f, 1 - std::fabs(t + 0.5f) / 0.18f);
+                return add(out, WHITE, (classic() ? 0.35f : 0.18f) * hl);
+            };
+            // strips across it, from the front end to the round back end (shaded as the body, so a
+            // tube of several bricks stays one)
+            const Vector2 u{dir.x / len * r, dir.y / len * r};
+            const int strips = 16;
+            for (int i = 0; i < strips; i++) {
+                float ta = -1 + 2.0f * i / strips, tb = -1 + 2.0f * (i + 1) / strips;
+                float ea = std::sqrt(std::max(0.0f, 1 - ta * ta)), eb = std::sqrt(std::max(0.0f, 1 - tb * tb));
+                Color ca = shade(ta), cb = shade(tb);
+                quad_grad({fc.x + n.x * ta, fc.y + n.y * ta}, {bc.x + n.x * ta + u.x * ea, bc.y + n.y * ta + u.y * ea},
+                          {bc.x + n.x * tb + u.x * eb, bc.y + n.y * tb + u.y * eb}, {fc.x + n.x * tb, fc.y + n.y * tb},
+                          ca, ca, cb, cb);
+            }
             line({fc.x + n.x, fc.y + n.y}, {bc.x + n.x, bc.y + n.y}, w, c);
             line({fc.x - n.x, fc.y - n.y}, {bc.x - n.x, bc.y - n.y}, w, c);
-            DrawCircleV(fc, r, fill(7));
+            // the end: a disc, lighter to its upper left, a rim inside its edge
+            if (glow) DrawCircleV(fc, r, fill(7));
+            else {
+                Color cap = fill(7);
+                DrawCircleV(fc, r, scale(cap, 0.85f));
+                const Vector2 hc{fc.x - r * 0.18f, fc.y - r * 0.18f};
+                const Color in = scale(cap, classic() ? 1.12f : 1.4f), out = scale(cap, 0.85f);
+                for (int i = 0; i < 32; i++) {  // a disc lighter at its centre (raylib's gradient circle
+                    float a = i * 2 * PI / 32, b = (i + 1) * 2 * PI / 32;  // differs between versions)
+                    tri_grad(hc, {hc.x + r * 0.78f * std::cos(a), hc.y + r * 0.78f * std::sin(a)},
+                             {hc.x + r * 0.78f * std::cos(b), hc.y + r * 0.78f * std::sin(b)}, in, out, out);
+                }
+                DrawRing(fc, r * 0.72f, r * 0.8f, 0, 360, 40, Fade(scale(cap, 0.6f), 0.6f));
+            }
             DrawRing(fc, r - w, r, 0, 360, 40, c);
         } else if (k.shape == Shape::Barrel) {
             Vector2 bottom = P(x0 + 2, y0, zm), top = P(x0 + 2, y1, zm);
@@ -892,8 +940,6 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
             stroke(5+ra*std::cos(a),7+ra*std::sin(a),5+rb*std::cos(b),7+rb*std::sin(b));
         }
         plus(9,7); break;
-    case 0x20: // armour can be destroyed by either bomb or missile
-        circle(4,6.7f,1.25f); stroke(4,8,4.7f,9); rocket(8,7); break;
     case 0x24: case 0x26: {
         // Directional arrows lie on the top, pointing towards the rear striking face.
         for(float x : {x0+3, x0+8}) {
@@ -1676,7 +1722,7 @@ void BBRenderer::draw(const BBState& s, double t) {
 // they are drawn here over a dimmed room.
 
 namespace {
-const char* MENU_ITEMS[7] = {"PLAY GAME", "CONTROLS", "KEYS", "HI-SCORES", "INSTRUCTIONS", "SOUND FX", "OPTIONS"};
+const char* MENU_ITEMS[8] = {"PLAY GAME", "CONTROLS", "KEYS", "HI-SCORES", "INSTRUCTIONS", "SOUND FX", "OPTIONS", "EXIT"};
 constexpr Color MENU_GOLD{255, 214, 120, 255}, MENU_LILAC{205, 170, 255, 255}, MENU_DIM{150, 120, 200, 255};
 }  // namespace
 
@@ -1759,8 +1805,8 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
     auto title = [&](const char* s2) { text(s2, {W / 2.0f, 320}, 64, MENU_GOLD); };
     switch (m.screen) {
     case Sc::Main: {
-        for (int i = 0; i < 7; i++) {  // the game's six, and the remake's OPTIONS
-            float y = 390 + i * 78.0f, cx = W / 2.0f + (i % 2 ? 1 : -1) * gone * W * 0.75f;
+        for (int i = 0; i < 8; i++) {  // the game's six, and the remake's OPTIONS and EXIT
+            float y = 380 + i * 70.0f, cx = W / 2.0f + (i % 2 ? 1 : -1) * gone * W * 0.75f;
             bool on = i == m.cursor;
             if (on) {
                 float wpx = 640, hpx = 72;
@@ -1790,7 +1836,7 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
             if (!glow) text_left(rows[i][0], {360, y - 22}, 40, MENU_LILAC);
             text_left(rows[i][1], {900, y - 22}, 40, WHITE);
         }
-        footer("ENTER  back");
+        footer("ESC / ENTER  back");
         break;
     }
     case Sc::Keys: {
@@ -1866,9 +1912,9 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
         for (int p = 0; p < pages; p++)  // page dots
             DrawCircle(int(W / 2.0f + (p - (pages - 1) / 2.0f) * 30), H - 110, p == page ? 8 : 5, p == page ? WHITE : MENU_DIM);
         footer(m.instructions_auto
-                   ? (m.instructions_page >= 0 ? "LEFT / RIGHT  pages  /  auto paging off  /  returns to menu when finished"
-                                               : "LEFT / RIGHT  pages  /  automatic pages  /  returns to menu when finished")
-                   : "LEFT / RIGHT  pages  /  ENTER  back");
+                   ? (m.instructions_page >= 0 ? "LEFT / RIGHT  pages  /  auto paging off  /  ESC  back"
+                                               : "LEFT / RIGHT  pages  /  automatic pages  /  ESC  back")
+                   : "LEFT / RIGHT  pages  /  ESC / ENTER  back");
         break;
     }
     default: break;

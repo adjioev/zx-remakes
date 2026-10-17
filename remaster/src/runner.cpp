@@ -17,7 +17,7 @@
 //     ram_<n>.bin), orig / hd (the R view, at once), r (as the key: the dissolve), level<n> (jump
 //     there, 1-based, if the game can now), key<letter> (a game option key, e.g. keyl), poke<addr>=<value> (hex, e.g. poke8078=2),
 //     pokeat<pc>:<addr>=<value> (once, the next time the CPU gets to pc), pause / resume (overlay),
-//     mouse<x>,<y> (the mouse steers, pointing there in canvas pixels), nomouse, quit.
+//     mouse<x>,<y> (the mouse steers, pointing there in canvas pixels), nomouse, esc (as the key), quit.
 //     The run ends at the last event.
 
 #include <algorithm>
@@ -492,6 +492,10 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                     }
                 } else if (e.arg == "pause") { paused = true, options_open = false; picker = view->levels() > 0 && view->can_jump() ? view->level(*spec) : -1; }
                 else if (e.arg == "resume") paused = false;
+                else if (e.arg == "esc") {  // as the key: the game's module first
+                    if (GameView::Escape r = view->escape(); r != GameView::Escape::Done)
+                        paused = true, options_open = r == GameView::Escape::Options, picker = -1;
+                }
                 else if (e.arg.rfind("mouse", 0) == 0 && e.arg.find(',') != std::string::npos) {
                     size_t comma = e.arg.find(',');
                     script_held.mouse = true;
@@ -528,6 +532,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             view->input(*spec, controls_of(script_held));
             frame();
             if (view->take_options()) paused = options_open = true, picker = -1;
+            if (view->take_exit()) break;
             if (flip < 1) flip = std::min(1.0f, flip + 1.0f / (FLIP_SECONDS * float(Spectrum::FRAME_HZ)));
             if (spec->frames() % 25 == 0) {  // keep the window alive (and showing something)
                 render();
@@ -574,8 +579,9 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                 acc = 0;
                 if (audio) audio->clear();
             }
-        } else if (IsKeyPressed(KEY_ESCAPE) || pad.pressed(Pad::START) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
-            paused = true, options_open = false;
+        } else if ((IsKeyPressed(KEY_ESCAPE) || pad.pressed(Pad::START) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) &&
+                   view->escape() != GameView::Escape::Done) {
+            paused = true, options_open = view->escape() == GameView::Escape::Options;
             picker = view->levels() > 0 && view->can_jump() ? view->level(*spec) : -1;
             view->input(*spec, Controls{});  // let go of everything
         } else if (IsKeyPressed(KEY_R) && view->letters_free()) {
@@ -615,6 +621,10 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                     paused = options_open = true, picker = -1;
                     break;
                 }
+            }
+            if (view->take_exit()) {
+                exit = GameExit::Back;
+                break;
             }
             if (acc > step) acc = 0;  // too far behind (e.g. the window was dragged): skip
         }

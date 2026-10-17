@@ -37,7 +37,7 @@ float slab_lift(int sprite);
 struct BBMenu {
     enum class Screen { None, Loading, Main, Controls, Keys, HiScores, Instructions, LevelCard };
     Screen screen = Screen::None;
-    int cursor = 0;  // main menu item 0-5, 6: the remake's OPTIONS
+    int cursor = 0;  // main menu item 0-5, 6 / 7: the remake's OPTIONS / EXIT
     std::string title = "BALL BREAKER", publisher = "CRL GROUP PLC 1987";  // the game's
     std::string level_name, designer;  // the level card's (Ballbreaker II), if the game has them
     bool sound_fx = false;  // the game's own option: effects instead of its tune in play (0x8076 = 0)
