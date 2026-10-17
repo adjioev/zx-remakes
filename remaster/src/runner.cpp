@@ -228,7 +228,13 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
     std::vector<ScriptEvent> script;
     if (!test_dir.empty()) {
         // a scripted run: the games keep nothing of it (hi-scores...); ZX_TEST_HISCORES=1 to check that they do
-        if (!std::getenv("ZX_TEST_HISCORES")) setenv("ZXREMAKES_TEST", "1", 1);
+        if (!std::getenv("ZX_TEST_HISCORES")) {
+#ifdef _WIN32
+            _putenv_s("ZXREMAKES_TEST", "1");
+#else
+            setenv("ZXREMAKES_TEST", "1", 1);
+#endif
+        }
         try {
             script = parse_script(script_text.empty() ? DEFAULT_SCRIPT : script_text);
         } catch (const std::exception& e) {
