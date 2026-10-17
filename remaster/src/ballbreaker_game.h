@@ -66,6 +66,10 @@ struct BBGame {
     // level_start's return from building the level (its objects from 0xF409, the end at 0x804C):
     // before it the object list is the old level's, or (BB2) its card's text buffer
     uint16_t level_built = 0;
+    // the ball's batch of moves (a pass when it is due): its start (LD HL,(0x8064)) and the publish of
+    // the result after it; the position the batch started from (a brick hit puts the ball back there),
+    // the falling flag (set as the ball leaves the floor past the bat), the slow-ball counter
+    uint16_t ball_batch = 0, ball_batch_end = 0, ball_start = 0, ball_falling = 0, ball_slow = 0;
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -130,6 +134,18 @@ private:
     BBState state_, latest_;
     BBPaddleBody modern_body(const Spectrum&) const;
     void modern_step(Spectrum&, const zxc_regs_t&);
+    // Even: the ball flown by the remake (see hybrid_step); the game keeps the bricks, bonuses, creatures
+    bool hybrid() const { return hybrid_ && !original_speed_ && g_.ball_batch; }
+    bool codex_even() const { return !original_speed_ && !hybrid(); }  // the earlier Even (BB1, BB_HYBRID=0)
+    bool preview_on() const { return preview_enabled_ && !hybrid(); }
+    void hybrid_step(Spectrum&, bool batch);
+    struct HybridBall {
+        float x = 0, z = 0, vx = 0, vz = 0;  // the centre (0x8064 / 0x8065) and the velocity, units a frame
+        int wx = -1, wz = -1, wdx = 0, wdz = 0;  // what was last written: position, directions
+        uint64_t frame = 0, batch = 0;           // the frames of the last move, the last batch
+        bool live = false;                       // in flight (from a batch on, until it falls)
+    } hb_;
+    bool hybrid_ = true;
     void modern_paddle_move(Spectrum&);
     void publish_modern_hit(Spectrum&, BBPaddleHit, std::optional<uint64_t> tick = {});
     BBPaddleHit resolve_modern_hit(Spectrum&, BBPaddleSweep, BBPaddleBody, float paddle_dx, bool step);
