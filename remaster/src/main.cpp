@@ -81,7 +81,8 @@ Texture2D cover_of(const LoadedGame& g, const std::string& assets) {
         SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
         return t;
     }
-    auto spec = (g.variant->format == FileFormat::Tap ? Spectrum::from_tap(g.data) : Spectrum::from_z80(g.data));
+    if (g.variant->format != FileFormat::Z80) return {};  // a tape takes seconds to load: no cover from it
+    auto spec = Spectrum::from_z80(g.data);
     if (!spec) return {};
     std::vector<uint32_t> px(Spectrum::SCREEN_W * Spectrum::SCREEN_H);
     Spectrum::screen_rgba(spec->screen(), px.data());
@@ -164,6 +165,11 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             } else if (auto k = KEYS.find(w); k != KEYS.end()) scripted.insert(k->second);
         }
         if (quit) break;
+        // the EXIT button (bottom right): its place, and a click on it
+        const float bw = 150, bh = 52;
+        const Rectangle exit_btn{float(GetScreenWidth()) - bw - 28, float(GetScreenHeight()) - bh - 24, bw, bh};
+        const bool over_exit = !ask && CheckCollisionPointRec(GetMousePosition(), exit_btn);
+        if (over_exit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) break;
         if (!test_dir.empty() && steps.empty() && frame == 10) {  // --test without a game: capture this screen, quit
             Image shot = LoadImageFromScreen();
             ExportImage(shot, (test_dir + "/game_list.png").c_str());
@@ -212,6 +218,7 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             if (pressed(KEY_RIGHT)) sel = (sel + 1) % n;
             if (go && find(games, cur.id)) chosen = cur.id;
             else if ((go || pressed(KEY_D)) && cur.download_url) ask = &cur;
+            if (pressed(KEY_ESCAPE)) break;  // out of the program
         }
         if (pressed(KEY_F) || pressed(KEY_F11)) ToggleBorderlessWindowed();
 
@@ -258,7 +265,10 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             }
         }
         float ty = y0 + ch + 60;
-        centred("LEFT / RIGHT  choose      ENTER  play      F  full screen", w / 2, ty, 26, Fade(RAYWHITE, 0.75f));
+        centred("LEFT / RIGHT  choose      ENTER  play      F  full screen      ESC  quit", w / 2, ty, 26, Fade(RAYWHITE, 0.75f));
+        DrawRectangleRounded(exit_btn, 0.3f, 8, over_exit ? Color{255, 214, 96, 255} : Color{36, 36, 46, 255});
+        DrawRectangleRoundedLinesEx(exit_btn, 0.3f, 8, 2, {255, 214, 96, 255});
+        centred("EXIT", exit_btn.x + bw / 2, exit_btn.y + (bh - 26) / 2, 26, over_exit ? Color{14, 14, 20, 255} : RAYWHITE);
         centred("The original games are not included: download them here, or drop your own copies onto this window.", w / 2,
                 ty + 44, 22, Fade(RAYWHITE, 0.55f));
         if (!downloading.empty()) centred(downloading.c_str(), w / 2, ty + 88, 22, {255, 214, 96, 255});

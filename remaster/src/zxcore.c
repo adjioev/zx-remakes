@@ -29,8 +29,16 @@ struct zxc {
     bool jump;
     uint16_t jump_at, jump_to, jump_sp;
     uint64_t cpu_ticks;
-    uint8_t* tape;  // a .tap image (blocks: [length word][flag, data..., checksum]), loaded by the ROM trap
-    size_t tape_size, tape_pos;
+    uint8_t* tape;  // the blocks, as in a .tap: [length word][flag, data..., checksum]
+    uint16_t* pauses;  // ms of silence after each block
+    size_t tape_size, tape_pos;  // tape_pos: the block being played / read next
+    int block;  // its number
+    // played as the signal on EAR, for loaders the ROM trap cannot take (see tape_tick)
+    bool playing, ear, fast;  // fast: a copy of LD-BYTES is done at once too (see tape_tick)
+    int phase, pulses, bit, half;
+    uint32_t unread;  // T-states since port 0xFE was last read
+    uint32_t t_left;
+    size_t byte;
     float ring[AUDIO_RING];
     unsigned ring_w, ring_r;  // only touched by the thread that runs the emulator
 };
@@ -102,7 +110,7 @@ zxc_t* zxc_create(int model, int sample_rate) {
 }
 
 void zxc_destroy(zxc_t* zx) {
-    if (zx) zx_discard(&zx->sys), free(zx->tape);
+    if (zx) zx_discard(&zx->sys), free(zx->tape), free(zx->pauses);
     free(zx);
 }
 
@@ -193,55 +201,201 @@ static uint64_t maybe_jump(zxc_t* zx, uint64_t pins) {
 }
 
 // The ROM's LD-BYTES (0x0556 in the 48K BASIC ROM), done at once from the tape image: A = the
-// flag byte wanted, IX = where, DE = how many, carry = load (else verify). Blocks with another
-// flag are passed over, as the ROM does. Returns as LD-BYTES does (carry = success, interrupts
-// on again) to the caller's return address.
-static uint64_t maybe_tape(zxc_t* zx, uint64_t pins) {
-    if ((pins & (Z80_M1 | Z80_MREQ | Z80_RD)) != (Z80_M1 | Z80_MREQ | Z80_RD) || Z80_GET_ADDR(pins) != 0x0556)
-        return pins;
+// flag byte wanted, IX = where, DE = how many, carry = load. Blocks with another flag are passed
+// over, as the ROM does. Returns as LD-BYTES does (carry = success, interrupts on again) to the
+// caller's return address.
+static uint64_t rom_load(zxc_t* zx, bool ei) {
     zx_t* sys = &zx->sys;
-    if (sys->type == ZX_TYPE_128 && !(sys->last_mem_config & 0x10)) return pins;  // the 128 editor ROM
     z80_t* c = &sys->cpu;
     bool ok = false;
     while (zx->tape_pos + 2 <= zx->tape_size) {
         size_t len = zx->tape[zx->tape_pos] | zx->tape[zx->tape_pos + 1] << 8;
         const uint8_t* b = zx->tape + zx->tape_pos + 2;
-        if (zx->tape_pos + 2 + len > zx->tape_size) break;
-        zx->tape_pos += 2 + len;
+        zx->tape_pos += 2 + len, zx->block++;
         if (len < 2 || b[0] != c->a) continue;
         size_t n = len - 2 < c->de ? len - 2 : c->de;
-        bool same = true;
-        for (size_t i = 0; i < n; i++) {
-            uint16_t at = (uint16_t)(c->ix + i);
-            if (c->f & Z80_CF) mem_wr(&sys->mem, at, b[1 + i]);
-            else same &= mem_rd(&sys->mem, at) == b[1 + i];
-        }
-        ok = n == c->de && same;
+        for (size_t i = 0; i < n; i++) mem_wr(&sys->mem, (uint16_t)(c->ix + i), b[1 + i]);
+        ok = n == c->de;
         c->ix = (uint16_t)(c->ix + n), c->de = (uint16_t)(c->de - n);
         break;
     }
     c->f = ok ? (uint8_t)(c->f | Z80_CF) : (uint8_t)(c->f & ~Z80_CF);
-    c->iff1 = c->iff2 = true;
+    if (ei) c->iff1 = c->iff2 = true;  // as the ROM's own way out does (a copy's may not)
     uint16_t ret = (uint16_t)(mem_rd(&sys->mem, c->sp) | mem_rd(&sys->mem, (uint16_t)(c->sp + 1)) << 8);
     c->sp = (uint16_t)(c->sp + 2);
     return z80_prefetch(c, ret);  // drops this fetch, carries on at the caller
 }
 
+// The tape as a signal (standard ROM timing, in CPU T-states): pilot, two sync pulses, each bit
+// as two pulses, a second of silence after each block.
+enum { TAPE_PILOT, TAPE_SYNC1, TAPE_SYNC2, TAPE_DATA, TAPE_PAUSE };
+
+static void tape_block(zxc_t* zx) {
+    if (zx->tape_pos + 2 > zx->tape_size) {
+        zx->playing = false;
+        return;
+    }
+    const uint8_t* b = zx->tape + zx->tape_pos + 2;
+    zx->phase = TAPE_PILOT;
+    zx->pulses = b[0] < 0x80 ? 8063 : 3223;  // header / data
+    zx->t_left = 2168;
+}
+
+static uint32_t tape_bit(zxc_t* zx) {
+    const uint8_t* b = zx->tape + zx->tape_pos + 2;
+    return (b[zx->byte] >> zx->bit) & 1 ? 1710 : 855;
+}
+
+static void tape_pulse(zxc_t* zx) {  // the current pulse is over
+    size_t len = zx->phase == TAPE_PAUSE ? 0 : (size_t)(zx->tape[zx->tape_pos] | zx->tape[zx->tape_pos + 1] << 8);
+    if (zx->phase != TAPE_PAUSE) zx->ear = !zx->ear;
+    switch (zx->phase) {
+    case TAPE_PILOT:
+        if (--zx->pulses > 0) zx->t_left = 2168;
+        else zx->phase = TAPE_SYNC1, zx->t_left = 667;
+        break;
+    case TAPE_SYNC1: zx->phase = TAPE_SYNC2, zx->t_left = 735; break;
+    case TAPE_SYNC2:
+        zx->phase = TAPE_DATA, zx->byte = 0, zx->bit = 7, zx->half = 0;
+        zx->t_left = len ? tape_bit(zx) : 1;
+        break;
+    case TAPE_DATA:
+        if (!zx->half) {
+            zx->half = 1, zx->t_left = tape_bit(zx);
+            break;
+        }
+        zx->half = 0;
+        if (--zx->bit < 0) zx->bit = 7, zx->byte++;
+        if (zx->byte < len) zx->t_left = tape_bit(zx);
+        else {  // the block is read; the last edge stays (the loader needs it to end the last bit), then silence
+            zx->phase = TAPE_PAUSE;
+            zx->t_left = 3500u * (zx->pauses[zx->block] ? zx->pauses[zx->block] : 1);
+            zx->tape_pos += 2 + len, zx->block++;  // (after the last block: plays on to its pause's end)
+        }
+        break;
+    case TAPE_PAUSE:
+        zx->ear = false;
+        tape_block(zx);
+        break;
+    }
+}
+
+// Every CPU T-state with a tape in: a load through the ROM (LD-BYTES called with carry set, the
+// 48K BASIC ROM paged in) is done at once. Anything else that reaches LD-BYTES (a verify), or a
+// copy of it elsewhere (a game's own loader: it starts as the ROM's does, INC D / EX AF,AF' /
+// DEC D / DI), starts the tape playing from the next block, and from then on port 0xFE reads
+// see it on EAR (bit 6) until it ends.
+static uint64_t tape_tick(zxc_t* zx, uint64_t pins) {
+    zx_t* sys = &zx->sys;
+    if (!zx->playing && (pins & (Z80_M1 | Z80_MREQ | Z80_RD)) == (Z80_M1 | Z80_MREQ | Z80_RD)) {
+        uint16_t pc = Z80_GET_ADDR(pins);
+        bool rom = !(sys->type == ZX_TYPE_128 && !(sys->last_mem_config & 0x10));
+        if (pc == 0x0556 && rom && (sys->cpu.f & Z80_CF)) return rom_load(zx, true);
+        bool copy = pc >= 0x4000 && mem_rd(&sys->mem, pc) == 0x14 && mem_rd(&sys->mem, (uint16_t)(pc + 1)) == 0x08 &&
+                    mem_rd(&sys->mem, (uint16_t)(pc + 2)) == 0x15 && mem_rd(&sys->mem, (uint16_t)(pc + 3)) == 0xF3;
+        if (copy && zx->fast) return rom_load(zx, false);  // a guess that it loads as the ROM does
+        if ((pc == 0x0556 && rom) || copy) {
+            zx->playing = true;
+            tape_block(zx);
+        }
+    }
+    if (!zx->playing) return pins;
+    // the tape moves while a loader polls the port (every few dozen T-states), and stops while
+    // the program does something else (the keyboard is read only once a frame): no block runs
+    // past a program that is busy between two loads
+    bool read = (pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD) && !(pins & Z80_A0);
+    if (read) zx->unread = 0;
+    else if (zx->unread < 100000) zx->unread++;
+    if (zx->unread < 4096 && --zx->t_left == 0) tape_pulse(zx);
+    if (read) {
+        uint8_t data = Z80_GET_DATA(pins);
+        data = zx->ear ? (uint8_t)(data | 0x40) : (uint8_t)(data & ~0x40);
+        Z80_SET_DATA(pins, data);
+    }
+    return pins;
+}
+
+static bool insert(zxc_t* zx, uint8_t* tape, size_t size, uint16_t* pauses) {
+    free(zx->tape), free(zx->pauses);
+    zx->tape = tape, zx->pauses = pauses;
+    zx->tape_size = size, zx->tape_pos = 0, zx->block = 0, zx->playing = false, zx->unread = 0;
+    return true;
+}
+
 bool zxc_insert_tap(zxc_t* zx, const uint8_t* data, size_t size) {
-    for (size_t pos = 0; pos < size;) {  // whole blocks only
+    int blocks = 0;
+    for (size_t pos = 0; pos < size; blocks++) {  // whole blocks only
         if (pos + 2 > size) return false;
         pos += 2 + (data[pos] | data[pos + 1] << 8);
         if (pos > size) return false;
     }
-    free(zx->tape);
-    zx->tape = (uint8_t*)malloc(size ? size : 1);
-    if (!zx->tape) return false;
-    memcpy(zx->tape, data, size);
-    zx->tape_size = size, zx->tape_pos = 0;
-    return true;
+    uint8_t* tape = (uint8_t*)malloc(size ? size : 1);
+    uint16_t* pauses = (uint16_t*)malloc(sizeof(uint16_t) * (size_t)(blocks + 1));
+    if (!tape || !pauses) return free(tape), free(pauses), false;
+    memcpy(tape, data, size);
+    for (int i = 0; i <= blocks; i++) pauses[i] = 1000;
+    return insert(zx, tape, size, pauses);
 }
 
+bool zxc_insert_tzx(zxc_t* zx, const uint8_t* d, size_t size) {
+    if (size < 10 || memcmp(d, "ZXTape!\x1a", 8) != 0) return false;
+    uint8_t* tape = (uint8_t*)malloc(size);
+    uint16_t* pauses = (uint16_t*)malloc(sizeof(uint16_t) * (size / 2 + 1));
+    if (!tape || !pauses) return free(tape), free(pauses), false;
+    size_t out = 0, i = 10;
+    int blocks = 0;
+    bool ok = true;
+    while (ok && i < size) {
+        uint8_t id = d[i++];
+        size_t left = size - i;
+        switch (id) {
+        case 0x10: {  // standard speed data: [pause ms][length][data]
+            if (left < 4) { ok = false; break; }
+            size_t len = d[i + 2] | d[i + 3] << 8;
+            if (left < 4 + len) { ok = false; break; }
+            tape[out] = (uint8_t)len, tape[out + 1] = (uint8_t)(len >> 8);
+            memcpy(tape + out + 2, d + i + 4, len);
+            out += 2 + len;
+            pauses[blocks++] = (uint16_t)(d[i] | d[i + 1] << 8);
+            i += 4 + len;
+            break;
+        }
+        case 0x20:  // a pause after the last block
+            if (left < 2) { ok = false; break; }
+            if (blocks) pauses[blocks - 1] = (uint16_t)(pauses[blocks - 1] + (d[i] | d[i + 1] << 8));
+            i += 2;
+            break;
+        case 0x21: if (left < 1) ok = false; else i += 1 + d[i]; break;  // group start
+        case 0x22: break;                                                 // group end
+        case 0x30: if (left < 1) ok = false; else i += 1 + d[i]; break;  // text
+        case 0x32: if (left < 2) ok = false; else i += 2 + (d[i] | d[i + 1] << 8); break;  // archive info
+        default: ok = false;  // turbo and other signal blocks: not yet
+        }
+    }
+    if (!ok || !blocks) return free(tape), free(pauses), false;
+    pauses[blocks] = 1000;
+    return insert(zx, tape, out, pauses);
+}
+
+void zxc_set_fast_load(zxc_t* zx, bool on) { zx->fast = on; }
+
 size_t zxc_tape_left(const zxc_t* zx) { return zx->tape ? zx->tape_size - zx->tape_pos : 0; }
+
+bool zxc_tape_playing(const zxc_t* zx) { return zx->playing; }
+
+size_t zxc_state_size(void) { return sizeof(zx_t); }
+
+uint32_t zxc_save_state(zxc_t* zx, void* out) { return zx_save_snapshot(&zx->sys, (zx_t*)out); }
+
+bool zxc_load_state(zxc_t* zx, uint32_t version, const void* state) {
+    zx_t* copy = (zx_t*)malloc(sizeof(zx_t));  // zx_load_snapshot takes it non-const
+    if (!copy) return false;
+    memcpy(copy, state, sizeof(zx_t));
+    bool ok = zx_load_snapshot(&zx->sys, version, copy);
+    free(copy);
+    if (ok) install_debug(zx);
+    return ok;
+}
 
 void zxc_jump_at(zxc_t* zx, uint16_t at_pc, uint16_t to_pc, uint16_t sp) {
     zx->jump = true;
@@ -264,7 +418,7 @@ void zxc_run_frame(zxc_t* zx) {
         zx->cpu_ticks++;
         if (hooked) on_tick(zx, pins);
         if (zx->jump) pins = maybe_jump(zx, pins);
-        if (zx->tape) pins = maybe_tape(zx, pins);
+        if (zx->tape) pins = tape_tick(zx, pins);
         if (zx->turbo > 1 && !zx->yielded) {
             zx->turbo_acc += zx->turbo - 1;
             while (zx->turbo_acc >= 1 && !zx->yielded) {
@@ -273,7 +427,7 @@ void zxc_run_frame(zxc_t* zx) {
                 zx->cpu_ticks++;
                 if (hooked) on_tick(zx, pins);
                 if (zx->jump) pins = maybe_jump(zx, pins);
-                if (zx->tape) pins = maybe_tape(zx, pins);
+                if (zx->tape) pins = tape_tick(zx, pins);
             }
         }
     }

@@ -113,11 +113,16 @@ void MusicRemix::step(int k, int in_beat) {
     triad(held_bass_, notes);
     for (int i = 0; i < 3; i++) pad_notes_[i] = hz(notes[i]);
     if (in_beat % 2 == 0) {
-        int eighth = k / 2;  // root, octave, root, octave
+        int eighth = k / 2;
+        // Two eight-bar phrases: steady octaves, then a more grounded groove.
+        constexpr int groove[8] = {0, 0, 12, 0, 0, 12, 0, 12};
+        int interval = (k / 128) % 2 ? groove[eighth % 8] : (eighth % 2) * 12;
         float base = held_bass_ / (held_bass_ < 70 ? 1 : 2);
         bass_.on = true, bass_.t = 0;
-        bass_.freq = base * (eighth % 2 ? 2 : 1);
+        bass_.freq = base * (interval == 12 ? 2 : 1);
         bass_.notes[0] = base;  // the sub stays on the root
+    } else if (k % 128 >= 120) {
+        // Leave the last two beats of each eight-bar phrase open for the fill.
     } else if (in_beat == 1) {
         stab_.on = true, stab_.t = 0;
     } else {
@@ -204,9 +209,16 @@ void MusicRemix::follow(uint64_t cur) {
         step(k, in_beat);
         if (in_beat == 0) {
             kick_.on = true, kick_.t = 0, kick_.phase = 0;
-            if ((k / 4) % 2 == 1) snare_.on = true, snare_.t = 0, snare_.phase = 0;  // 2 and 4
+            if ((k / 4) % 2 == 1) {  // snare + clap on 2 and 4
+                snare_.on = true, snare_.t = 0, snare_.phase = 0;
+                clap_.on = true, clap_.t = 0;
+            }
         }
-        if (in_beat == 2) shaker_.on = true, shaker_.t = 0;
+        // Quiet eighth-note hats, with two extra sixteenths at the phrase end.
+        if (in_beat % 2 == 0 || k % 128 >= 124) {
+            shaker_.on = true, shaker_.t = 0;
+            shaker_.kind = in_beat == 2 ? 1 : 0;
+        }
     }
     // the lead (the tune's own line), as the AY plays it from where its note is due
     const Snap& ls = hist_[(cur + uint64_t(lead_shift_)) % HIST];
@@ -216,11 +228,12 @@ void MusicRemix::follow(uint64_t cur) {
 
 void MusicRemix::render(float* out, int n) {
     const float dt = 1.0f / sr_;
-    const float a_pad = lp_coef(2200, sr_), a_pad_hp = lp_coef(180, sr_), a_stab = lp_coef(3800, sr_),
-                a_stab_hp = lp_coef(220, sr_), a_ep_hp = lp_coef(250, sr_), a_arp = lp_coef(2600, sr_),
+    const float a_pad = lp_coef(2200, sr_), a_pad_hp = lp_coef(180, sr_), a_stab = lp_coef(2800, sr_),
+                a_stab_hp = lp_coef(220, sr_), a_ep_hp = lp_coef(250, sr_), a_ep_lp = lp_coef(3200, sr_), a_arp = lp_coef(2600, sr_),
                 a_arp_hp = lp_coef(400, sr_), a_lead_hp = lp_coef(180, sr_), a_glide = lp_coef(25, sr_),
                 a_lvol = lp_coef(30, sr_), a_rev_hp = lp_coef(250, sr_), a_sn_lp = lp_coef(3500, sr_),
-                a_sn_hp = lp_coef(900, sr_), a_sh_lp = lp_coef(9000, sr_), a_sh_hp = lp_coef(4500, sr_);
+                a_sn_hp = lp_coef(900, sr_), a_sh_lp = lp_coef(9000, sr_), a_sh_hp = lp_coef(4500, sr_),
+                a_clap_lp = lp_coef(6500, sr_), a_clap_hp = lp_coef(1200, sr_);
     const size_t keys_n = keys_dl_.size(), echo_n = echo_dl_.size();
     for (int i = 0; i < n; i++) {
         // Derive modulation time from an exact sample count, not repeated float
@@ -238,7 +251,9 @@ void MusicRemix::render(float* out, int n) {
             float osc = 0.5f * square(bass_.phase, f * dt) + 0.5f * saw(bass_.phase2, f * 1.003f * dt);
             osc = lp(bass_.lp, osc, lp_coef(180 + 1500 * std::exp(-t / 0.06f), sr_));
             float env = std::min(1.0f, t / 0.003f) * std::exp(-t / 0.25f);
-            float b = (osc * 0.55f + 0.85f * std::sin(TWO_PI * bass_.lp2)) * env * 0.6f;
+            // Saturate the upper voice only; the sub remains a clean sine.
+            float bite = std::tanh(osc * 1.8f) / 1.8f;
+            float b = (bite * 0.72f + 0.85f * std::sin(TWO_PI * bass_.lp2)) * env * 0.6f;
             L += b, R += b;
             if (t > 0.8f) bass_.on = false;
         }
@@ -255,7 +270,7 @@ void MusicRemix::render(float* out, int n) {
         float stab = 0;
         if (stab_.on) {
             float t = stab_.t += dt;
-            stab = hp(stab_hp_, lp(stab_lp_, chord * std::min(1.0f, t / 0.004f) * std::exp(-t / 0.11f), a_stab), a_stab_hp) * 0.40f;
+            stab = hp(stab_hp_, lp(stab_lp_, chord * std::min(1.0f, t / 0.008f) * std::exp(-t / 0.11f), a_stab), a_stab_hp) * 0.40f;
             if (t > 0.6f) stab_.on = false;
         }
         float keys = pad + stab;
@@ -271,16 +286,17 @@ void MusicRemix::render(float* out, int n) {
         float kl = tap(keys_dl_, 7 + 2.5f * std::sin(TWO_PI * 0.6f * lfo_t));
         float kr = tap(keys_dl_, 7 + 2.5f * std::sin(TWO_PI * 0.6f * lfo_t + 3.14159f));
         L += kl * 0.2f + keys * 0.8f, R += kr * 0.2f + keys * 0.8f;
-        // DX7-ish electric piano answering the stabs: a falling FM index, a faint bell
+        // Warm electric piano: restrained FM/bell harmonics and a rounded attack.
         float ep = 0;
         if (ep_.on) {
             float t = ep_.t += dt;
             for (int v = 0; v < 3; v++) {
                 float f = ep_.notes[v];
-                ep += std::sin(TWO_PI * f * t + 1.6f * std::exp(-t / 0.05f) * std::sin(TWO_PI * f * t)) * std::exp(-t / 0.25f);
-                ep += 0.15f * std::sin(TWO_PI * f * 7 * t) * std::exp(-t / 0.02f);
+                ep += std::sin(TWO_PI * f * t + 1.1f * std::exp(-t / 0.05f) * std::sin(TWO_PI * f * t)) * std::exp(-t / 0.25f);
+                ep += 0.04f * std::sin(TWO_PI * f * 7 * t) * std::exp(-t / 0.02f);
             }
-            ep = hp(ep_.hp, ep / 3, a_ep_hp) * 0.22f;
+            ep *= std::min(1.0f, t / 0.008f);
+            ep = hp(ep_.hp, lp(ep_.lp, ep / 3, a_ep_lp), a_ep_hp) * 0.22f;
             if (t > 1.2f) ep_.on = false;
         }
         L += ep * 1.1f, R += ep * 0.9f;
@@ -314,12 +330,12 @@ void MusicRemix::render(float* out, int n) {
         echo_dl_[dl_pos_ % echo_n] = lead;
         float echo = 0.14f * tap(echo_dl_, 420) + 0.0196f * tap(echo_dl_, 840);
         L += ll * 0.24f + lead * 0.96f + echo * 0.8f, R += lr * 0.24f + lead * 0.96f + echo * 1.0f;
-        // drums: kick, a soft body snare, a smooth shaker
+        // Compact electro drums: short kick, body snare, clap and quiet hats.
         float drums = 0, snare = 0;
         if (kick_.on) {
             float t = kick_.t += dt;
-            advance_phase(kick_.phase, (48 + 120 * std::exp(-t / 0.025f)) * dt);
-            drums += std::sin(TWO_PI * kick_.phase) * std::exp(-t / 0.18f) * 0.9f;
+            advance_phase(kick_.phase, (50 + 145 * std::exp(-t / 0.018f)) * dt);
+            drums += std::sin(TWO_PI * kick_.phase) * std::exp(-t / 0.13f) * 0.95f;
             if (t > 0.5f) kick_.on = false;
         }
         if (snare_.on) {
@@ -333,9 +349,26 @@ void MusicRemix::render(float* out, int n) {
         if (shaker_.on) {
             float t = shaker_.t += dt;
             float nz = hp(shaker_.hp, lp(shaker_.lp, noise(), a_sh_lp), a_sh_hp);
-            float s = nz * std::min(1.0f, t / 0.004f) * std::exp(-t / 0.025f) * 0.10f;
+            float decay = shaker_.kind ? 0.035f : 0.018f;
+            float s = nz * std::min(1.0f, t / 0.002f) * std::exp(-t / decay) * (shaker_.kind ? 0.10f : 0.065f);
             L += s * 1.1f, R += s * 0.9f;
             if (t > 0.15f) shaker_.on = false;
+        }
+        if (clap_.on) {
+            float t = clap_.t += dt;
+            float envelope = 0;
+            for (float onset : {0.0f, 0.011f, 0.022f}) {
+                float age = t - onset;
+                if (age >= 0) envelope += std::min(1.0f, age / 0.0015f) * std::exp(-age / 0.009f);
+            }
+            if (t >= 0.022f) {
+                float age = t - 0.022f;
+                envelope += 0.35f * std::min(1.0f, age / 0.002f) * std::exp(-age / 0.065f);
+            }
+            float nz = hp(clap_.hp, lp(clap_.lp, noise(), a_clap_lp), a_clap_hp);
+            float clap = nz * envelope * 0.18f;
+            L += clap, R += clap;
+            if (t > 0.35f) clap_.on = false;
         }
         L += drums + snare, R += drums + snare;
         // a small room on the music

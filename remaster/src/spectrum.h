@@ -22,9 +22,18 @@ public:
 
     // A machine of the model the snapshot needs, with it loaded; nothing if it can't be.
     static std::unique_ptr<Spectrum> from_z80(const std::vector<uint8_t>& snapshot);
-    // A 128K loading a .tap through its Tape Loader, at once; returned waiting on the program's
-    // first PAUSE after the tape (the loading screen). nullptr if nothing was loaded.
-    static std::unique_ptr<Spectrum> from_tap(const std::vector<uint8_t>& tape);
+    // A 128K loading a .tap / .tzx through its Tape Loader (zxc_insert_tap: through the ROM at
+    // once, a game's own loader by the signal); returned waiting on the program's first PAUSE after
+    // the tape (the loading screen), or two seconds after it. nullptr if it did not all load.
+    // progress: called every few frames with the screen (6912 bytes) and how much of the tape is read
+    // (0-1), from the thread loading it.
+    using TapeProgress = std::function<void(const uint8_t* screen, float done)>;
+    static std::unique_ptr<Spectrum> from_tape(const std::vector<uint8_t>& tape, bool tzx,
+                                               const TapeProgress& progress = {});
+    // The machine as it is now, to start from later (from_state: nullptr if the state is not one this
+    // build made). Hooks are not kept.
+    std::vector<uint8_t> save_state() const;
+    static std::unique_ptr<Spectrum> from_state(const std::vector<uint8_t>& state);
     ~Spectrum();
     Spectrum(const Spectrum&) = delete;
     Spectrum& operator=(const Spectrum&) = delete;

@@ -8,7 +8,8 @@
 // percussion (not used: its noisy ticks); a note every 7 frames, 4 to a beat, in A minor. The
 // arrangement is synthpop: an eighth-note bass with octaves and a sub, Juno-style PWM chords with
 // light chorus alternating stabs with DX7-ish electric piano, sparse arpeggio fills, a PWM lead with
-// glide, chorus and echo; kick on every beat, a soft snare on 2 and 4, a shaker on the off-beats.
+// glide, chorus and echo; short kick on every beat, snare/clap on 2 and 4, quiet eighth-note hats.
+// Bass patterns alternate every eight bars, with space for a small phrase-ending fill.
 // The grid counts from the tune's first note (after a silence), so it starts from the top.
 
 #include <array>
@@ -62,7 +63,7 @@ private:
     uint64_t start_ = 0;
     int silent_ = 0, on_grid_ = 0, restart_wait_ = 0;  // silent frames in a row; notes on the grid in a row
     // instruments
-    Voice bass_, arp_, stab_, ep_, kick_, snare_, shaker_;
+    Voice bass_, arp_, stab_, ep_, kick_, snare_, shaker_, clap_;
     float pad_ph_[3] = {0, 0, 0}, pad_notes_[3] = {0, 0, 0}, pad_amp_ = 0, pad_lp_ = 0, pad_hp_ = 0;
     float stab_lp_ = 0, stab_hp_ = 0;
     float lead_ph_ = 0, lead_ph2_ = 0, lead_lp_ = 0, lead_hp_ = 0;

@@ -18,17 +18,53 @@
 // menus, play and name entry from arrows / WASD / Space / Enter / gamepad.
 
 #include <cstdint>
+#include <cmath>
 #include <deque>
 #include <map>
+#include <set>
 #include <memory>
 #include <utility>
 #include <vector>
 
 #include "ballbreaker_hd.h"
+#include "ballbreaker_preview.h"
+#include "ballbreaker_paddle_motion.h"
 #include "game.h"
+
+// Where things are in one of the Ball Breaker games: Ballbreaker II (notes/ballbreaker2.md) is the
+// same engine reassembled, with the same sprites and rooms; most of its code sits 0x22 further on.
+struct BBGame {
+    const char* art;  // assets/<art>: the HD art (shared)
+    const char* title;
+    const char* publisher;
+    uint16_t level_names;                 // the levels' names: strings, last char + 0x80, '*' new line (0: none)
+    std::vector<const char*> designers;   // the levels' designers, five levels each (none: not shown)
+    // code run once a frame in each part of the game
+    uint16_t menu_loop, play_loop, entry_loop, page_loop, ctrl_loop, keys_loop;
+    // the item under the menu's bar: its address, and the first item's value (others: no item)
+    uint16_t menu_cursor;
+    int cursor_base;
+    // a menu with an arrow moved freely (Ballbreaker II): its x, y (0: a bar moved item to item);
+    // the remake puts it on the item chosen, rows from y = 0x58, 16 apart
+    uint16_t menu_pointer;
+    uint16_t main_loop, play_exit, pass_end, level_start, play_result;  // play
+    uint16_t paddle_hit, creature_lands, creature_caught, bat_eaten;   // events
+    uint16_t ball_clock_read, ball_due, serve_countdown;               // pacing
+    uint16_t tune_start;  // the music player's start of the tune (0: unmapped, no remix)
+    uint16_t tune_vars;   // its variables (BB1 0x80AE: speed, channel pointers at +5 +7 +9...)
+    uint16_t tune_tempo;  // its tempo word
+    uint16_t lives, control_type, hiscores, instructions, points, sprites;
+    uint16_t trainer;  // a tape's trainer patches this DEC (HL) (0: none)
+    int levels;
+    std::vector<std::vector<int>> rooms;  // the levels (1-based) in each room, A-G
+    uint16_t instructions_entry = 0;  // automatic demonstration entry, when mapped
+    BBTheme theme = BBTheme::Neon;    // the HD look to start with (T changes it)
+};
+extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
 class BallBreakerView : public OriginalView {
 public:
+    explicit BallBreakerView(const BBGame& game = BALL_BREAKER) : g_(game) {}
     void start(Spectrum&, const std::string& assets) override;
     void input(Spectrum&, const Controls&) override;
     void after_frame(Spectrum&) override;
@@ -39,7 +75,7 @@ public:
 
     bool letters_free() const override { return mode_ != Mode::NameEntry; }
     std::string on_key(Spectrum&, int key) override;
-    int levels() const override { return 50; }
+    int levels() const override { return g_.levels; }
     int level(const Spectrum& s) const override;
     bool can_jump() const override { return mode_ == Mode::Play; }
     void jump_to(Spectrum&, int level) override;
@@ -53,6 +89,8 @@ public:
     Mode mode() const { return mode_; }
 
 private:
+    const BBGame& g_;
+    int room_of(int level) const;
     bool hd_now(bool original) const;
     BBState read_state(const Spectrum&) const;
 
@@ -88,20 +126,51 @@ private:
     int pending_level_ = -1;
     bool bat_eaten_ = false;  // unlimited lives: the bat eaten up, the game told it was a lost ball
     uint16_t eater_ = 0;      // the object of the creature that landed on the bat
+    // how far the picture runs behind the game: BB_RENDER_DELAY at the even pace; at the original's,
+    // the ball's longest recent step (its slowdowns), so every move is a glide, never a wait
+    double delay_ = BB_RENDER_DELAY, ball_moved_t_ = -1;
+    std::deque<double> ball_steps_;
+    // at the original's pace each object glides from where it is shown to where the game has put it,
+    // over the last step duration. The ball may coast up to half a step beyond
+    // the endpoint when its surrounding space is clear; other objects never predict.
+    struct Glide {
+        float from[5], to[5];
+        float coast = 0;  // maximum predicted fraction of a step
+        double t0 = 0, dur = 0.04, changed = -1;  // the glide's start and length; the last new position
+        void at(double t, float* out) const {
+            float k = float(std::max((t - t0) / dur, 0.0));
+            if (k > 1) k = coast > 0 ? 1 + coast * (1 - std::exp(-(k - 1) / coast)) : 1;
+            for (int i = 0; i < 5; i++) out[i] = from[i] + (to[i] - from[i]) * k;
+        }
+    };
+    std::map<int, Glide> glides_;
+    BBOriginalPreview preview_;
+    BBPaddleMotion paddle_motion_;
+    uint64_t paddle_motion_hit_ = 0;
+    bool preview_enabled_ = false;  // explicit BB_ORIGINAL_PREVIEW opt-in, never the default
+    bool original_speed_ = false;  // option O: the original's own pace (its slowdowns, its ball clock), no pacing
     bool unlimited_lives_ = false, unlimited_missiles_ = false;  // options (L, K); off = the original  // a jump asked for: done as the CPU gets to the next play pass
     int gain_ = 0;           // score gained lately, for the next burst's "+points"
     double gain_t_ = -1;  // bricks gone, points, for the renderer
     double game_t_ = 0;
     Mode mode_ = Mode::Boot;
     uint64_t frame_ = 0;
+    bool instructions_active_ = false;
+    int instructions_page_ = -1, instructions_dir_ = 0;
     uint64_t seen_menu_ = 0, seen_play_ = 0, seen_entry_ = 0;  // frame + 1 of the last sighting
     uint64_t seen_ctrl_ = 0, seen_keys_ = 0, seen_page_ = 0;
     BBMenu::Screen screen_ = BBMenu::Screen::None;  // which menu page is up (None: play, boot)
     BBMenu::Screen input_screen_ = BBMenu::Screen::None;
     bool wait_release_ = false;  // a new page: keys held from the last one don't count
     int cursor_ = 0;                                // main menu item, as last seen
+    int menu_dir_ = 0, menu_held_ = 0;              // the arrow menu: the direction held, for how many frames
     uint64_t screen_since_ = 0;                     // frame the screen came up
     uint64_t left_menu_ = 0;                        // frame + 1 PLAY GAME was taken (the menu's wipe)
+    uint64_t slide_start_ = 0;                      // frame + 1 the level card's room started coming in
+    bool slide_armed_ = false;                      // the card's playfield seen blank (the menu's gone)
+    std::set<int> seen_slots_;                      // the bricks of the last frame
+    std::map<int, double> drops_;                   // bricks dropping in: when each starts its fall
+    void drop_in(BBState&, double t);
     BBMenu::Screen last_screen_ = BBMenu::Screen::None;
     std::string fonts_dir_, intro_path_, creatures_path_;
     // sound effects: asked for, not yet taken; the ball as last heard (its last step's direction)

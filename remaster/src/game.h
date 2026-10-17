@@ -109,6 +109,13 @@ private:
 
 // The module for a game (OriginalView for games without HD art yet).
 std::unique_ptr<GameView> make_view(GameId id);
+// The machine with the game's file in: a snapshot loaded, or a tape loaded (Spectrum::from_tape,
+// progress as there). cache_dir set: a tape's machine is kept there once loaded (<sha1>.state) and
+// taken from there the next times, at once.
+std::unique_ptr<Spectrum> load_machine(const LoadedGame& game, const std::string& cache_dir = "",
+                                       const Spectrum::TapeProgress& progress = {});
+// The file the machine of a tape would be kept in, if there is one (cached_machine: it exists).
+bool cached_machine(const LoadedGame& game, const std::string& cache_dir);
 
 GameExit run_game(const LoadedGame& game, const std::string& assets, const std::string& test_dir,
                   const std::string& script);

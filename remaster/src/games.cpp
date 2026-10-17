@@ -1,6 +1,9 @@
 // The module of each game, and the default one: the original picture.
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include "ballbreaker_game.h"
 #include "game.h"
@@ -58,6 +61,38 @@ void OriginalView::draw(const Spectrum& s, bool, double) { draw_original_fit(s);
 std::unique_ptr<GameView> make_view(GameId id) {
     switch (id) {
     case GameId::BallBreaker: return std::make_unique<BallBreakerView>();
+    case GameId::BallBreaker2: return std::make_unique<BallBreakerView>(BALL_BREAKER_2);
     }
     return nullptr;
+}
+
+namespace {
+std::string state_file(const LoadedGame& game, const std::string& cache_dir) {
+    return cache_dir.empty() ? "" : cache_dir + sha1_hex(game.data) + ".state";
+}
+}  // namespace
+
+bool cached_machine(const LoadedGame& game, const std::string& cache_dir) {
+    std::error_code ec;
+    return game.variant->format != FileFormat::Z80 && !cache_dir.empty() &&
+           std::filesystem::is_regular_file(state_file(game, cache_dir), ec);
+}
+
+std::unique_ptr<Spectrum> load_machine(const LoadedGame& game, const std::string& cache_dir,
+                                       const Spectrum::TapeProgress& progress) {
+    if (game.variant->format == FileFormat::Z80) return Spectrum::from_z80(game.data);
+    const std::string file = state_file(game, cache_dir);
+    if (!file.empty()) {  // loaded before: its machine as it was then
+        std::ifstream in(file, std::ios::binary);
+        std::vector<uint8_t> state((std::istreambuf_iterator<char>(in)), {});
+        if (auto s = Spectrum::from_state(state)) return s;
+    }
+    auto s = Spectrum::from_tape(game.data, game.variant->format == FileFormat::Tzx, progress);
+    if (s && !file.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(cache_dir, ec);
+        std::vector<uint8_t> state = s->save_state();
+        std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(state.data()), std::streamsize(state.size()));
+    }
+    return s;
 }

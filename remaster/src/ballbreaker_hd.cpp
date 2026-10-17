@@ -13,10 +13,14 @@ namespace {
 constexpr int SPRITES = 60, SPRITE_W = 24, SPRITE_H = 20, SPRITE_BYTES = 120;
 constexpr float CUBE = 12;
 constexpr float CREATURE_PAD = 3;  // sprite pixels around each painted creature frame (tools/bb_creatures.py)
-constexpr float FLOOR_X = 92, FLOOR_Z = 148, WALL_H = 64, LIP = 8;
+constexpr float WALL_H = 64, LIP = 8;
+constexpr float ROOM_X = 92, ROOM_Z = 148;  // the original's room: back wall at X = 92, left wall at Z = 148
+// this level's: some levels have bricks set into a wall (the original's flat sprites just cover
+// it); the walls move out to them, so they stand against the wall (BBRenderer::prepare)
+float FLOOR_X = ROOM_X, FLOOR_Z = ROOM_Z;
 
 // What each sprite is (the bricks in the game's instructions), drawn as that shape in that colour.
-enum class Shape { Cube, Framed, LBlock, Pyramid, Diamond, Lying, Barrel, Ring, Wire, Prism, Ramp, Slabs };
+enum class Shape { Cube, Armored, Framed, LBlock, Pyramid, Diamond, Lying, Barrel, LifeBall, Wire, Prism, Ramp, Slabs };
 
 struct Kind {
     Shape shape;
@@ -28,7 +32,7 @@ Kind kind_of(int sprite) {
     switch (sprite) {
     case -1: return {Shape::Cube, {240, 210, 255, 255}};                 // the bat
     case 0x01: return {Shape::Lying, {80, 220, 255, 255}};               // 5 extra missiles
-    case 0x02: return {Shape::Ring, {90, 255, 150, 255}};                // bonus life
+    case 0x02: return {Shape::LifeBall, {90, 255, 150, 255}};                // bonus life
     case 0x03: return {Shape::Wire, {200, 240, 255, 255}};               // changes bat size
     case 0x04: case 0x31: case 0x32: case 0x33: case 0x3a:
         return {Shape::Pyramid, {255, 90, 220, 255}};                    // 200 points
@@ -38,10 +42,12 @@ Kind kind_of(int sprite) {
     case 0x07: case 0x22: return {Shape::Prism, {255, 220, 90, 255}};    // 500 points
     case 0x0d: case 0x23: return {Shape::Ramp, {140, 200, 255, 255}};
     case 0x08: return {Shape::Framed, {255, 200, 60, 255}};              // 1000 bonus points
-    case 0x10: return {Shape::Cube, {150, 150, 180, 255}};               // only a bomb breaks it
+    case 0x09: return {Shape::Armored, {170, 190, 210, 255}};            // only a bomb breaks it
+    case 0x10: return {Shape::Cube, {150, 150, 180, 255}};               // 600 points
     case 0x0e: case 0x2c: case 0x2d: case 0x2e: case 0x2f: case 0x30:
         return {Shape::Slabs, {255, 120, 200, 255}};
-    case 0x20: case 0x35: case 0x36: case 0x37: case 0x38: case 0x39:
+    case 0x20: return {Shape::Armored, {120, 160, 190, 255}};             // bomb or missile
+    case 0x35: case 0x36: case 0x37: case 0x38: case 0x39:
         return {Shape::Framed, {120, 160, 255, 255}};
     case 0x00: return {Shape::Cube, {110, 80, 240, 255}};
     case 0x21: return {Shape::Cube, {120, 170, 255, 255}};
@@ -675,6 +681,38 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
     };
     switch (k.shape) {
     case Shape::Cube: box(x0, x1, y0, y1, z0, z1, c); break;
+    case Shape::Armored: {
+        box(x0, x1, y0, y1, z0, z1, c);
+        // Steel bands and a bomb emblem on both visible sides. Use the same
+        // projected face coordinates for full-size bricks and menu thumbnails.
+        for (int side = 0; side < 2; ++side) {
+            auto point = [&](float u, float v) {
+                return side == 0 ? P(x0, y0 + v, z1 - u) : P(x0 + u, y0 + v, z0);
+            };
+            Color steel = classic() ? Color{223, 231, 237, 255} : Color{105, 130, 155, 255};
+            Color ink = classic() ? Color{30, 40, 53, 255} : Color{255, 205, 95, 255};
+            if (!glow) {
+                for (float u : {0.8f, 9.5f}) {
+                    quad(point(u, 0.7f), point(u + 1.7f, 0.7f), point(u + 1.7f, 11.3f), point(u, 11.3f), steel);
+                    for (float v : {1.6f, 10.4f})
+                        DrawCircleV(point(u + 0.85f, v), g_scale * 0.28f, Color{44, 57, 72, 255});
+                }
+            }
+            if (o.sprite != 0x09) continue;
+            // Round bomb with a short bent fuse: recognizable without colour.
+            Vector2 centre = point(6, 5.6f);
+            for (int i = 0; i < 24; ++i) {
+                float a = float(i) * 2*PI/24, b = float(i+1) * 2*PI/24;
+                Vector2 p = point(6 + 2.1f*std::cos(a), 5.6f + 2.1f*std::sin(a));
+                Vector2 q = point(6 + 2.1f*std::cos(b), 5.6f + 2.1f*std::sin(b));
+                if (!glow) tri(centre, p, q, ink);
+            }
+            line(point(6, 7.4f), point(6, 8.5f), g_scale * 0.6f, ink);
+            line(point(6, 8.5f), point(7.4f, 9.2f), g_scale * 0.6f, ink);
+            line(point(7.4f, 9.2f), point(8, 8.5f), g_scale * 0.45f, ink);
+        }
+        break;
+    }
     case Shape::Framed: {
         box(x0, x1, y0, y1, z0, z1, c);
         float m = 2.5f;  // an inner frame on the front and the right face
@@ -740,9 +778,28 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
         edges({{a, b}, {b, e}, {e, f}, {b, f}, {a, g}, {f, g}}, c);
         break;
     }
+    case Shape::LifeBall: {
+        // A stationary green bonus capsule occupies a brick-sized box. Its flat
+        // ball-plus emblem cannot be mistaken for the moving silver sphere.
+        box(x0, x1, y0, y1, z0, z1, c);
+        if (glow) break;
+        const Color emblem = classic() ? Color{22, 68, 47, 255} : Color{193, 255, 216, 255};
+        for (int side=0; side<2; ++side) {
+            auto point = [&](float u,float v) {
+                return side == 0 ? P(x0,y0+v,z1-u) : P(x0+u,y0+v,z0);
+            };
+            for(int i=0;i<24;++i) {
+                float a=i*2*PI/24, b=(i+1)*2*PI/24;
+                tri(point(4.5f,6),point(4.5f+2.1f*std::cos(a),6+2.1f*std::sin(a)),
+                    point(4.5f+2.1f*std::cos(b),6+2.1f*std::sin(b)),emblem);
+            }
+            line(point(7.6f,6),point(10,6),g_scale*0.55f,emblem);
+            line(point(8.8f,4.8f),point(8.8f,7.2f),g_scale*0.55f,emblem);
+        }
+        break;
+    }
     case Shape::Lying:
-    case Shape::Barrel:
-    case Shape::Ring: {
+    case Shape::Barrel: {
         // round things: a glowing disc / tube, the front face is undistorted in this projection
         Vector2 fc = P(x0, ym, zm), bc = P(x1, ym, zm);
         float r = 5.5f * g_scale;
@@ -764,13 +821,73 @@ void BBRenderer::brick(const BBObject& o, double, bool glow) {
             line({bottom.x - r, top.y}, {bottom.x - r, bottom.y}, w, c);
             line({bottom.x + r, top.y}, {bottom.x + r, bottom.y}, w, c);
             DrawCircleV({top.x, (top.y + bottom.y) / 2}, r * 0.35f, glow ? c : scale(c, 0.9f));  // the fuse light
-        } else {
-            DrawRing(fc, r * 0.55f, r, 0, 360, 40, c);
-            if (glow) DrawCircleV(fc, r * 0.4f, scale(c, 0.6f));
         }
         break;
     }
     }
+    if (glow || o.slot < 3) return;
+    const Color ink = classic() ? Color{24, 33, 48, 255} : Color{255, 240, 190, 255};
+    auto decal = [&](float u, float v) {
+        if (k.shape == Shape::Pyramid || k.shape == Shape::Diamond) {
+            float h = k.shape == Shape::Diamond ? 6 + v*0.45f : v;
+            float inset = k.shape == Shape::Diamond ? (h-6) : h/2;
+            return P(xm+(u-6)*(1-inset/6), y0+h, z0+inset);
+        }
+        if (k.shape == Shape::Prism) return P(x0+u, y0+v, z0+v/2);
+        if (k.shape == Shape::Ramp) return P(x0+v, y0+v, z1-u);
+        return P(x0+u, y0+v, z0);
+    };
+    auto stroke = [&](float u, float v, float u2, float v2, float width=0.32f) {
+        line(decal(u,v), decal(u2,v2), g_scale*width, ink);
+    };
+    auto circle = [&](float u, float v, float radius) {
+        for(int i=0;i<24;++i) {
+            float a=i*2*PI/24, b=(i+1)*2*PI/24;
+            stroke(u+radius*std::cos(a),v+radius*std::sin(a),u+radius*std::cos(b),v+radius*std::sin(b));
+        }
+    };
+    auto plus = [&](float u,float v) { stroke(u-0.75f,v,u+0.75f,v); stroke(u,v-0.75f,u,v+0.75f); };
+    auto rocket = [&](float u,float v) {
+        stroke(u-0.7f,v-1.2f,u-0.7f,v+1); stroke(u+0.7f,v-1.2f,u+0.7f,v+1);
+        stroke(u-0.7f,v+1,u,v+2); stroke(u,v+2,u+0.7f,v+1);
+        stroke(u-0.7f,v-0.4f,u-1.3f,v-1.5f); stroke(u+0.7f,v-0.4f,u+1.3f,v-1.5f);
+        stroke(u,v-1.1f,u,v-2);
+    };
+    switch(o.sprite) {
+    case 0x03:
+        if (!classic()) {
+            stroke(3,6,9,6); stroke(3,6,4.5f,7.5f); stroke(3,6,4.5f,4.5f);
+            stroke(9,6,7.5f,7.5f); stroke(9,6,7.5f,4.5f);
+        }
+        break;
+    case 0x21: // clock: slower ball
+        circle(6,7,2.5f); stroke(6,7,6,8.8f); stroke(6,7,7.4f,6.3f); break;
+    case 0x01: case 0x0d:
+        rocket(5,7); plus(8.5f,7); break;
+    case 0x08: case 0x27: // bonus points: star and plus
+        for(int i=0;i<10;++i) {
+            float a=PI/2+i*PI/5, b=a+PI/5;
+            float ra=i%2 ? 1.05f : 2.4f, rb=i%2 ? 2.4f : 1.05f;
+            stroke(5+ra*std::cos(a),7+ra*std::sin(a),5+rb*std::cos(b),7+rb*std::sin(b));
+        }
+        plus(9,7); break;
+    case 0x20: // armour can be destroyed by either bomb or missile
+        circle(4,6.7f,1.25f); stroke(4,8,4.7f,9); rocket(8,7); break;
+    case 0x24: case 0x26: {
+        // Directional arrows lie on the top, pointing towards the rear striking face.
+        for(float x : {x0+3, x0+8}) {
+            line(P(x,y1,z0+2),P(x,y1,z1-2),g_scale*0.4f,ink);
+            line(P(x,y1,z1-2),P(x-1.3f,y1,z1-4),g_scale*0.4f,ink);
+            line(P(x,y1,z1-2),P(x+1.3f,y1,z1-4),g_scale*0.4f,ink);
+        }
+        break;
+    }
+    case 0x3b: // door / next screen
+        stroke(3,5,3,10); stroke(3,10,7,10); stroke(7,10,7,5);
+        stroke(5,7.5f,9,7.5f); stroke(9,7.5f,7.8f,8.7f); stroke(9,7.5f,7.8f,6.3f); break;
+    default: break;
+    }
+
 }
 
 BBRenderer::BatShape BBRenderer::bat_shape(int sprite) const {
@@ -1247,6 +1364,13 @@ void BBRenderer::scene(const BBState& s, double t, bool glow) {
         menu_scene(m, t, glow);
         return;
     }
+    // the level card: the room (and all on it) comes in from the left, as the original's
+    const bool sliding = s.menu.screen == Sc::LevelCard && s.menu.slide < 1;
+    if (sliding) {
+        rlDrawRenderBatchActive();
+        rlPushMatrix();
+        rlTranslatef(-(1 - s.menu.slide) * float(W), 0, 0);
+    }
     room(s.room, t, glow);
     // contact shadows on the floor under the bricks standing on it
     if (!glow)
@@ -1271,6 +1395,10 @@ void BBRenderer::scene(const BBState& s, double t, bool glow) {
             sprite(*o, glow ? Color{220, 160, 255, 255} : Color{210, 170, 255, 255}, t, glow);
     }
     effects(t, glow);
+    if (sliding) {
+        rlDrawRenderBatchActive();
+        rlPopMatrix();
+    }
     if (s.menu.screen == Sc::LevelCard) level_card(s, t, glow);
 }
 
@@ -1343,6 +1471,12 @@ void BBRenderer::update_ball(const BBObject* b, double t, float dt) {
 }
 
 void BBRenderer::prepare(const BBState& s, double t) {
+    if (s.level != room_level_) room_level_ = s.level, FLOOR_X = ROOM_X, FLOOR_Z = ROOM_Z;
+    for (const auto& o : s.objects)
+        if (o.slot >= 3 && !(o.sprite >= 0x11 && o.sprite <= 0x1f)) {  // bricks (not aliens, explosions)
+            FLOOR_X = std::max(FLOOR_X, std::round(o.x) + CUBE);
+            FLOOR_Z = std::max(FLOOR_Z, std::round(o.z));
+        }
     if (const char* path = std::getenv("BB_SPRITE_SHEET"); path && has_sprites()) {  // debug: the aliens' frames, once
         static bool done = false;
         if (!done) {
@@ -1389,15 +1523,15 @@ void BBRenderer::prepare(const BBState& s, double t) {
     for (const auto& o : s.objects) if (o.slot == 0) b = &o;
     const auto& hit = s.paddle_hit;
     if (!hit.id) bat_waves_.clear();  // level / life transition
-    if (hit.id && hit.id != shown_paddle_hit_ && t + 1e-8 >= hit.t + BB_RENDER_DELAY) {
+    if (hit.id && hit.id != shown_paddle_hit_ && t + 1e-8 >= hit.t + s.render_delay) {
         shown_paddle_hit_ = hit.id;
-        float age = float(std::max(0.0, t - hit.t - BB_RENDER_DELAY));
+        float age = float(std::max(0.0, t - hit.t - s.render_delay));
         // Don't replay an old collision after returning from the original view.
         if (b && age < 0.35f) bat_waves_.push_back({hit.along, age});
     }
     // Confirmed paddle contacts have their own effect; the velocity heuristic is
     // only for other bounces, and must not add a second flash as the ball leaves.
-    if (hit.id && t >= hit.t && t < hit.t + BB_RENDER_DELAY + 0.15) ball_.bounce_t = t;
+    if (hit.id && t >= hit.t && t < hit.t + s.render_delay + 0.15) ball_.bounce_t = t;
     update_ball(b, t, dt);
 
     if (classic()) return;  // solid materials need no bloom pass
@@ -1462,7 +1596,10 @@ void BBRenderer::draw(const BBState& s, double t) {
         DrawTexturePro(half_a_.texture, {0, 0, float(W / 4), -float(H / 4)}, {0, 0, float(W), float(H)}, {0, 0}, 0, WHITE);
         EndBlendMode();
     }
-    if (bat_edge_) line(bat_edge_a_, bat_edge_b_, 2.5f, Color{235, 250, 255, 255});  // crisp: the edge you aim with
+    if (bat_edge_) {  // crisp: the edge you aim with (coming in with the room on the level card)
+        float dx = s.menu.screen == BBMenu::Screen::LevelCard ? -(1 - s.menu.slide) * float(W) : 0;
+        line({bat_edge_a_.x + dx, bat_edge_a_.y}, {bat_edge_b_.x + dx, bat_edge_b_.y}, 2.5f, Color{235, 250, 255, 255});
+    }
     if (s.menu.screen == BBMenu::Screen::None || (s.menu.screen == BBMenu::Screen::LevelCard && s.menu.leave >= 1)) status_bar(s);
 }
 
@@ -1504,11 +1641,20 @@ void BBRenderer::thumbnail(int sprite, Vector2 centre, float scale, double t, bo
 }
 
 void BBRenderer::level_card(const BBState& s, double t, bool glow) {
+    // (the card stays over the room: the remake brings the room in during it)
     // "SCREEN n" over the room as it comes in
     if (!glow) DrawRectangle(0, 300, W, 260, Fade(BLACK, 0.45f));
     char buf[32];
     std::snprintf(buf, sizeof buf, "SCREEN %d", s.level + 1);
     float pulse = 0.85f + 0.15f * float(std::sin(t * 4));
+    if (!s.menu.level_name.empty()) {  // Ballbreaker II: the level's name, its number, its designer
+        float size = 110;
+        while (size > 50 && MeasureTextEx(font_big_, s.menu.level_name.c_str(), size, size * 0.06f).x > W - 160) size -= 6;
+        text(s.menu.level_name.c_str(), {W / 2.0f, 395}, size, scale(Color{230, 170, 255, 255}, pulse), true);
+        text(buf, {W / 2.0f, 478}, 40, Fade(MENU_LILAC, 0.85f));
+        if (!s.menu.designer.empty()) text(("DESIGNED BY " + s.menu.designer).c_str(), {W / 2.0f, 528}, 32, Fade(MENU_LILAC, 0.7f));
+        return;
+    }
     text(buf, {W / 2.0f, 400}, 140, scale(Color{230, 170, 255, 255}, pulse), true);
     text("GET READY", {W / 2.0f, 500}, 40, Fade(MENU_LILAC, 0.8f));
 }
@@ -1521,9 +1667,9 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
             DrawTexturePro(intro_, {0, 0, float(intro_.width), float(intro_.height)}, {0, 0, float(W), float(H)}, {0, 0}, 0,
                            WHITE);
         float pulse = 0.85f + 0.15f * float(std::sin(t * 2));
-        if (!glow) text("BALL BREAKER", {W / 2.0f + 6, 836 + 6}, 170, Fade(Color{40, 10, 80, 255}, 0.85f), true);
-        text("BALL BREAKER", {W / 2.0f, 836}, 170, scale(Color{235, 165, 255, 255}, pulse), true);
-        if (!glow) text("CRL GROUP PLC 1987", {W / 2.0f, 940}, 30, Fade(MENU_LILAC, 0.8f));
+        if (!glow) text(m.title.c_str(), {W / 2.0f + 6, 836 + 6}, 170, Fade(Color{40, 10, 80, 255}, 0.85f), true);
+        text(m.title.c_str(), {W / 2.0f, 836}, 170, scale(Color{235, 165, 255, 255}, pulse), true);
+        if (!glow) text(m.publisher.c_str(), {W / 2.0f, 940}, 30, Fade(MENU_LILAC, 0.8f));
         float blink = 0.5f + 0.5f * float(std::sin(t * 4));
         text("PRESS ANY KEY", {W / 2.0f, 1010}, 36, Fade(WHITE, glow ? 0.5f * blink : blink));
         return;
@@ -1535,9 +1681,9 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
     float pulse = 0.9f + 0.1f * float(std::sin(t * 2));
     // leaving for a game: the title rises away, the items part left and right (as the original's wipe)
     const float gone = m.leave < 1 ? m.leave * m.leave * (3 - 2 * m.leave) : 0, up = gone * 420, fade = 1 - gone;
-    text("BALL BREAKER", {W / 2.0f + 6, 136 + 6 - up}, 150, Fade(Color{60, 20, 120, 255}, glow ? 0 : 0.8f * fade), true);
-    text("BALL BREAKER", {W / 2.0f, 136 - up}, 150, Fade(scale(Color{225, 150, 255, 255}, pulse), fade), true);
-    if (!glow) text("CRL GROUP PLC 1987    ZX REMAKE", {W / 2.0f, 232 - up}, 26, Fade(MENU_LILAC, 0.75f * fade));
+    text(m.title.c_str(), {W / 2.0f + 6, 136 + 6 - up}, 150, Fade(Color{60, 20, 120, 255}, glow ? 0 : 0.8f * fade), true);
+    text(m.title.c_str(), {W / 2.0f, 136 - up}, 150, Fade(scale(Color{225, 150, 255, 255}, pulse), fade), true);
+    if (!glow) text((m.publisher + "    ZX REMAKE").c_str(), {W / 2.0f, 232 - up}, 26, Fade(MENU_LILAC, 0.75f * fade));
 
     auto footer = [&](const char* s2) {
         if (!glow) text(s2, {W / 2.0f, H - 60.0f}, 28, Fade(MENU_LILAC, 0.7f));
@@ -1581,10 +1727,13 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
         const char* rows[][2] = {{"R  /  TAB", "original 1987  /  remastered"},
                                  {"L", "unlimited lives"},
                                  {"K", "unlimited missiles"},
+                                 {"O", "original speed (slowdowns) / even"},
+                                 {"T", "HD theme"},
                                  {"ESC", "pause: jump to a level, sound, quit"},
                                  {"F11", "full screen"}};
-        for (int i = 0; i < 5; i++) {
-            float y = 420 + i * 84.0f;
+        const int n = int(sizeof rows / sizeof rows[0]);
+        for (int i = 0; i < n; i++) {
+            float y = 400 + i * 72.0f;
             text_left(rows[i][0], {460, y - 22}, 40, MENU_GOLD);
             if (!glow) text_left(rows[i][1], {800, y - 22}, 40, WHITE);
         }
@@ -1617,8 +1766,8 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
     }
     case Sc::Instructions: {
         title("THE BRICKS");
-        const int per = 9, pages = std::max(1, int((m.items.size() + per - 1) / per));
-        int page = int(m.since / 6) % pages;
+        const int per = BBMenu::INSTRUCTIONS_PER_PAGE, pages = std::max(1, int((m.items.size() + per - 1) / per));
+        int page = m.instructions_page >= 0 ? m.instructions_page % pages : int(m.since / 6) % pages;
         for (int i = 0; i < per; i++) {
             size_t k = size_t(page * per + i);
             if (k >= m.items.size()) break;
@@ -1645,7 +1794,10 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
         }
         for (int p = 0; p < pages; p++)  // page dots
             DrawCircle(int(W / 2.0f + (p - (pages - 1) / 2.0f) * 30), H - 110, p == page ? 8 : 5, p == page ? WHITE : MENU_DIM);
-        footer("any key  back");
+        footer(m.instructions_auto
+                   ? (m.instructions_page >= 0 ? "LEFT / RIGHT  pages  /  auto paging off  /  returns to menu when finished"
+                                               : "LEFT / RIGHT  pages  /  automatic pages  /  returns to menu when finished")
+                   : "LEFT / RIGHT  pages  /  ENTER  back");
         break;
     }
     default: break;

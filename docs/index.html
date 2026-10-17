@@ -133,15 +133,15 @@ footer p { margin: 6px 0; }
 <div class="hero">
   <div class="shots">
     <img src="img/bb-hd-2.webp" alt="">
-    <img src="img/bb-cl-1.webp" alt="">
+    <img src="img/bb2-cl-1.webp" alt="">
     <img src="img/bb-hd-4.webp" alt="">
   </div>
   <div class="text">
     <h1>ZX <b>REMAKES</b><span class="stripes"><i></i><i></i><i></i><i></i></span></h1>
     <span class="beta"><span class="en">BETA · WORK IN PROGRESS</span><span class="ru">БЕТА · В РАЗРАБОТКЕ</span></span>
     <p>
-      <span class="en">ZX Spectrum classics with new HD graphics, smooth movement and remastered sound, and the original gameplay underneath. The first game is <em>Ball Breaker</em>; more are on the way.</span>
-      <span class="ru">Классика ZX Spectrum в новой HD-графике, с плавным движением и обновлённым звуком, а под ними та же оригинальная игра. Первая игра — <em>Ball Breaker</em>, следующие уже в работе.</span>
+      <span class="en">ZX Spectrum classics with new HD graphics, smooth movement and remastered sound, and the original gameplay underneath. Now playing: <em>Ball Breaker</em> and <em>Ballbreaker II</em>; more are on the way.</span>
+      <span class="ru">Классика ZX Spectrum в новой HD-графике, с плавным движением и обновлённым звуком, а под ними та же оригинальная игра. Уже можно играть в <em>Ball Breaker</em> и <em>Ballbreaker II</em>, следующие в работе.</span>
     </p>
     <div class="btns">
       <a class="btn" href="#download"><span class="en">Download</span><span class="ru">Скачать</span> <small>Windows · macOS · Linux</small></a>
@@ -188,6 +188,40 @@ footer p { margin: 6px 0; }
           <li>Все комнаты и кирпичи заново нарисованы в HD, в двух вариантах: Neon и Classic HD</li>
           <li>Плавные мяч, бита и существа; свет, шлейфы и взрывы</li>
           <li>Обновлённые музыка и звук, поддержка геймпада, бесконечные жизни и ракеты по желанию</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="game">
+      <div>
+        <div class="themes" data-for="bb2" role="group" aria-label="HD theme">
+          <button type="button" data-theme="cl" aria-pressed="true">Classic HD</button>
+          <button type="button" data-theme="hd" aria-pressed="false">Neon</button>
+          <span><span class="en">in game: <kbd>T</kbd></span><span class="ru">в игре: <kbd>T</kbd></span></span>
+        </div>
+        <div class="compare" data-set="bb2">
+          <img class="under" alt="Ballbreaker II, original ZX Spectrum graphics">
+          <img class="over" alt="Ballbreaker II, remake">
+          <span class="tag l">ZX SPECTRUM</span>
+          <span class="tag r">HD</span>
+          <span class="bar"></span>
+        </div>
+        <div class="thumbs" data-for="bb2"></div>
+      </div>
+      <div>
+        <div class="year">CRL Group · 1988 · 48K / 128K</div>
+        <h3>Ballbreaker II</h3>
+        <p class="en">The sequel: thirty new screens with names like <em>Frog Crying Out Loud</em> and <em>Wall of Fame</em>, five each by six designers, from Simon Rockman to Clement Chambers, and five bonus screens. Same bricks, bombs, missiles and bat-eating frogs.</p>
+        <p class="ru">Продолжение: тридцать новых экранов с названиями вроде <em>Frog Crying Out Loud</em> и <em>Wall of Fame</em>, по пять от каждого из шести дизайнеров, от Саймона Рокмана до Клемента Чемберса. Те же кирпичи, бомбы, ракеты и лягушки, которые едят биту.</p>
+        <ul class="en">
+          <li>Every screen in HD, in its own Classic HD look (Neon too, with <kbd>T</kbd>)</li>
+          <li>Each screen's name and designer on its title card</li>
+          <li>The remastered soundtrack, smooth movement, gamepad, unlimited lives and missiles</li>
+        </ul>
+        <ul class="ru">
+          <li>Все экраны в HD, в своём оформлении Classic HD (и Neon по клавише <kbd>T</kbd>)</li>
+          <li>Название экрана и его автор на заставке уровня</li>
+          <li>Обновлённая музыка, плавное движение, геймпад, бесконечные жизни и ракеты</li>
         </ul>
       </div>
     </div>
@@ -246,6 +280,7 @@ footer p { margin: 6px 0; }
         <p class="en">Press <kbd>Enter</kbd> on the game’s card: the remake offers to download it from the <a href="https://spectrumcomputing.co.uk/">Spectrum Computing</a> archive and asks before it does. Or drag your own copy onto the window. Either way it is remembered, so you only do this once:</p>
         <p class="ru">Нажмите <kbd>Enter</kbd> на карточке игры: ремейк предложит скачать её из архива <a href="https://spectrumcomputing.co.uk/">Spectrum Computing</a> и спросит разрешения. Или перетащите в окно свою копию. В обоих случаях игра запоминается, так что это нужно сделать один раз:</p>
         <ul>
+          <li><em>Ballbreaker II</em>: <code>BallbreakerII.tzx.zip</code> <span class="en">from</span><span class="ru">с</span> <a href="https://spectrumcomputing.co.uk/entry/385/ZX-Spectrum/Ballbreaker_II">Spectrum Computing</a></li>
           <li><em>Ball Breaker</em>: <code>BallBreaker.tap.zip</code> <span class="en">from</span><span class="ru">с</span> <a href="https://spectrumcomputing.co.uk/entry/383/ZX-Spectrum/Ball_Breaker">Spectrum Computing</a>, <span class="en">or the TOSEC</span><span class="ru">или TOSEC</span> <code>Ball Breaker (1987)(CRL Group)[128K].z80</code></li>
         </ul>
       </div>
@@ -274,12 +309,13 @@ footer p { margin: 6px 0; }
         </table>
       </div>
       <div class="card">
-        <h3>Ball Breaker</h3>
+        <h3>Ball Breaker · Ballbreaker II</h3>
         <table class="keys">
           <tr><td><kbd>←</kbd><kbd>→</kbd> / <kbd>A</kbd><kbd>D</kbd></td><td><span class="en">move the bat</span><span class="ru">двигать биту</span></td></tr>
           <tr><td><kbd>Space</kbd> / <kbd>Ctrl</kbd></td><td><span class="en">fire a missile</span><span class="ru">выпустить ракету</span></td></tr>
           <tr><td><kbd>L</kbd></td><td><span class="en">unlimited lives</span><span class="ru">бесконечные жизни</span></td></tr>
           <tr><td><kbd>K</kbd></td><td><span class="en">unlimited missiles</span><span class="ru">бесконечные ракеты</span></td></tr>
+          <tr><td><kbd>O</kbd></td><td><span class="en">original speed, slowdowns and all (default: even speed)</span><span class="ru">оригинальная скорость с замедлениями (по умолчанию ровная)</span></td></tr>
         </table>
       </div>
     </div>
@@ -309,8 +345,8 @@ footer p { margin: 6px 0; }
 <footer>
   <div class="wrap">
     <p>
-      <span class="en">A free, non-commercial fan project, not affiliated with or endorsed by the original publishers or rights holders. <em>Ball Breaker</em> is © CRL Group.</span>
-      <span class="ru">Бесплатный некоммерческий фанатский проект, не связанный с оригинальными издателями и правообладателями. <em>Ball Breaker</em> © CRL Group.</span>
+      <span class="en">A free, non-commercial fan project, not affiliated with or endorsed by the original publishers or rights holders. <em>Ball Breaker</em> and <em>Ballbreaker II</em> are © CRL Group.</span>
+      <span class="ru">Бесплатный некоммерческий фанатский проект, не связанный с оригинальными издателями и правообладателями. <em>Ball Breaker</em> и <em>Ballbreaker II</em> © CRL Group.</span>
     </p>
     <p>
       <span class="en">Code under the GPL-2.0 license; the new art is for personal, non-commercial use.</span>
@@ -340,12 +376,14 @@ footer p { margin: 6px 0; }
 })();
 
 // before / after sliders, a row of screens under each, and the HD themes above
-var SETS = { bb: 5 };
+var SETS = { bb: 5, bb2: 5 };
 document.querySelectorAll('.compare').forEach(function (box) {
   var set = box.dataset.set, under = box.querySelector('.under'), over = box.querySelector('.over');
   var thumbs = document.querySelector('.thumbs[data-for="' + set + '"]');
   var themes = document.querySelector('.themes[data-for="' + set + '"]');
   var cur = 1, theme = 'hd';
+  var pressed = themes && themes.querySelector('[data-theme][aria-pressed="true"]');
+  if (pressed) theme = pressed.dataset.theme;  // the game's own default look
   function show(i) {
     cur = i;
     under.src = 'img/' + set + '-og-' + i + '.webp';

@@ -13,3 +13,4 @@ remaster/.cache/
 CLAUDE.md
 notes/
 remaster/notes-task.md
+__pycache__/

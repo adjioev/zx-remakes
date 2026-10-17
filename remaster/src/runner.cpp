@@ -23,6 +23,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <future>
+#include <mutex>
 #include <map>
 #include <memory>
 #include <optional>
@@ -36,6 +38,7 @@
 
 #include "audio.h"
 #include "game.h"
+#include "gamefile.h"
 #include "gamepad.h"
 #include "music_remix.h"
 #include "sfx.h"
@@ -193,7 +196,59 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             return GameExit::Quit;
         }
     }
-    std::unique_ptr<Spectrum> spec = (game.variant->format == FileFormat::Tap ? Spectrum::from_tap(game.data) : Spectrum::from_z80(game.data));
+    // a tape the first time: loaded in the background (seconds), its loading screen up meanwhile;
+    // then its machine is kept (not in test runs) and the next times start at once
+    // (ZX_TEST_CACHE=1: test runs too, to check it)
+    static const bool test_cache = std::getenv("ZX_TEST_CACHE") != nullptr;
+    const bool cache = test_dir.empty() || test_cache;
+    const std::string cache_dir = cache ? user_data_dir("ZX Remakes") + "cache/" : "";
+    std::unique_ptr<Spectrum> spec;
+    if (game.variant->format == FileFormat::Z80 || cached_machine(game, cache_dir) || !cache) {
+        spec = load_machine(game, cache_dir);
+    } else {
+        struct Shown {
+            std::mutex m;
+            std::vector<uint8_t> screen = std::vector<uint8_t>(6912, 0);
+            float done = 0;
+        } shown;
+        auto loading = std::async(std::launch::async, [&] {
+            return load_machine(game, cache_dir, [&](const uint8_t* scr, float done) {
+                std::lock_guard<std::mutex> lock(shown.m);
+                shown.screen.assign(scr, scr + 6912);
+                shown.done = done;
+            });
+        });
+        Image blank = GenImageColor(Spectrum::SCREEN_W, Spectrum::SCREEN_H, BLACK);
+        Texture2D tex = LoadTextureFromImage(blank);
+        UnloadImage(blank);
+        SetTextureFilter(tex, TEXTURE_FILTER_POINT);
+        std::vector<uint32_t> rgba(size_t(Spectrum::SCREEN_W) * Spectrum::SCREEN_H);
+        double t0 = GetTime();
+        while (loading.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
+            float done;
+            {
+                std::lock_guard<std::mutex> lock(shown.m);
+                Spectrum::screen_rgba(shown.screen.data(), rgba.data(), std::fmod(GetTime() - t0, 0.64) < 0.32);
+                done = shown.done;
+            }
+            UpdateTexture(tex, rgba.data());
+            float w = float(GetScreenWidth()), h = float(GetScreenHeight());
+            float k = std::min(w / Spectrum::SCREEN_W, (h - 120) / Spectrum::SCREEN_H) * 0.85f;
+            Rectangle dst{(w - Spectrum::SCREEN_W * k) / 2, (h - 120 - Spectrum::SCREEN_H * k) / 2, Spectrum::SCREEN_W * k,
+                          Spectrum::SCREEN_H * k};
+            BeginDrawing();
+            ClearBackground({14, 14, 20, 255});
+            DrawTexturePro(tex, {0, 0, float(Spectrum::SCREEN_W), float(Spectrum::SCREEN_H)}, dst, {0, 0}, 0, WHITE);
+            std::string msg = std::string("Loading ") + info.title + " from tape (the first time only)";
+            DrawText(msg.c_str(), int((w - float(MeasureText(msg.c_str(), 28))) / 2), int(h - 100), 28, Fade(RAYWHITE, 0.8f));
+            float bw = std::min(w * 0.6f, 900.0f), bx = (w - bw) / 2, by = h - 52;
+            DrawRectangleRounded({bx, by, bw, 12}, 1, 8, {40, 40, 54, 255});
+            DrawRectangleRounded({bx, by, std::max(12.0f, bw * std::clamp(done, 0.0f, 1.0f)), 12}, 1, 8, {255, 214, 96, 255});
+            EndDrawing();
+        }
+        UnloadTexture(tex);
+        spec = loading.get();
+    }
     if (!spec) {
         TraceLog(LOG_ERROR, "Could not load %s", game.variant->name);
         return GameExit::Back;

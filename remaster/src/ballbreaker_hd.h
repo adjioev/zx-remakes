@@ -36,6 +36,9 @@ struct BBMenu {
     enum class Screen { None, Loading, Main, Controls, Keys, HiScores, Instructions, LevelCard };
     Screen screen = Screen::None;
     int cursor = 0;  // main menu item 0-5
+    std::string title = "BALL BREAKER", publisher = "CRL GROUP PLC 1987";  // the game's
+    std::string level_name, designer;  // the level card's (Ballbreaker II), if the game has them
+    float slide = 1;  // the level card: the room coming in from the left as the original's (0 not yet, 1 in place)
     double since = 0;  // seconds this screen has been up
     float leave = 1;   // PLAY GAME taken: the main menu going (0 -> 1), as the original wipes it, then the card
     struct Score {
@@ -50,6 +53,9 @@ struct BBMenu {
         int points;
     };
     std::vector<Item> items;
+    bool instructions_auto = false;
+    int instructions_page = -1;  // -1: automatic; otherwise a manually selected page
+    static constexpr int INSTRUCTIONS_PER_PAGE = 9;
 };
 
 // Presentation follows the simulation by one ball step (25 Hz).
@@ -61,6 +67,7 @@ struct BBPaddleHit {
 };
 
 struct BBState {
+    double render_delay = BB_RENDER_DELAY;  // how far the picture runs behind the game (s)
     int level = 0;  // 0-based
     int room = 0;   // 0-6: A-G
     int score = 0, missiles = 0, lives = 0;
@@ -101,6 +108,7 @@ public:
     void debug_dump(const char* dir);
 
 private:
+    int room_level_ = -1;  // the level the room's size (its walls) is for
     BBTheme theme_ = BBTheme::Neon;
     bool classic() const { return theme_ == BBTheme::ClassicHD; }
     void scene(const BBState&, double t, bool glow_pass);

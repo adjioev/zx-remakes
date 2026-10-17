@@ -1,5 +1,6 @@
 #include "spectrum.h"
 
+#include <cstring>
 #include <utility>
 
 Spectrum::Spectrum(zxc_t* zx) : zx_(zx) { zxc_set_exec_fn(zx_, exec_trampoline, this); }
@@ -16,26 +17,71 @@ std::unique_ptr<Spectrum> Spectrum::from_z80(const std::vector<uint8_t>& snapsho
     return s;
 }
 
-std::unique_ptr<Spectrum> Spectrum::from_tap(const std::vector<uint8_t>& tape) {
-    zxc_t* zx = zxc_create(128, SAMPLE_RATE);
+std::unique_ptr<Spectrum> Spectrum::from_tape(const std::vector<uint8_t>& tape, bool tzx, const TapeProgress& progress) {
+    // the 128's menu, Tape Loader (Enter), and the tape: through the ROM at once, a game's own
+    // loader at once too (fast) or by the signal (the CPU 16 times as fast meanwhile); then on until
+    // the program waits in a PAUSE (the loading screen, where a .z80 of it is taken) or, a game
+    // started by its loader, two seconds; at most a minute and a half. A fast load that did not
+    // start the program (it never ran from RAM afterwards) is done again by the signal.
+    auto attempt = [&](bool fast) -> std::unique_ptr<Spectrum> {
+        zxc_t* zx = zxc_create(128, SAMPLE_RATE);
+        if (!zx) return nullptr;
+        std::unique_ptr<Spectrum> s(new Spectrum(zx));
+        if (!(tzx ? zxc_insert_tzx : zxc_insert_tap)(zx, tape.data(), tape.size())) return nullptr;
+        zxc_set_fast_load(zx, fast);
+        const size_t whole = zxc_tape_left(zx);
+        int done = -1;
+        bool started = false;  // after the tape: the program running (from RAM, or in a ROM PAUSE)
+        for (int f = 0; f < 4500; f++) {
+            if (zxc_tape_left(zx) == whole && !zxc_tape_playing(zx) && f % 100 == 60) zxc_key(zx, 0x0D, true);
+            if (f % 100 == 64) zxc_key(zx, 0x0D, false);
+            zxc_set_turbo(zx, zxc_tape_playing(zx) ? 16 : 1);
+            zxc_run_frame(zx);
+            if (progress && f % 5 == 0) progress(zxc_screen(zx), 1.0f - float(zxc_tape_left(zx)) / float(whole ? whole : 1));
+            if (done < 0 && zxc_tape_left(zx) == 0) done = f;
+            uint16_t pc = zxc_regs(zx).pc;
+            if (done >= 0 && pc >= 0x4000) started = true;
+            if (done >= 0 && f - done >= 10 && pc >= 0x1F3A && pc <= 0x1F54) return s;  // ROM PAUSE (0x1F3A)
+            if (done >= 0 && f - done >= 100) break;
+        }
+        zxc_set_turbo(zx, 1);
+        zxc_set_fast_load(zx, false);
+        return done >= 0 && started ? std::move(s) : nullptr;
+    };
+    std::unique_ptr<Spectrum> s = attempt(true);
+    if (!s) s = attempt(false);
+    if (!s) return nullptr;
+    zxc_set_turbo(s->zx_, 1);
+    zxc_set_fast_load(s->zx_, false);
+    float drop[1024];
+    while (zxc_audio(s->zx_, drop, 1024) > 0) {}  // the boot's sound is not the game's
+    return s;
+}
+
+namespace {
+constexpr char STATE_MAGIC[4] = {'Z', 'X', 'R', 'S'};
+}
+
+// [ZXRS][version][size][model][the machine]
+std::vector<uint8_t> Spectrum::save_state() const {
+    size_t n = zxc_state_size();
+    std::vector<uint8_t> out(16 + n);
+    uint32_t version = zxc_save_state(zx_, out.data() + 16);
+    uint32_t head[3] = {version, uint32_t(n), uint32_t(model())};
+    std::memcpy(out.data(), STATE_MAGIC, 4);
+    std::memcpy(out.data() + 4, head, sizeof head);
+    return out;
+}
+
+std::unique_ptr<Spectrum> Spectrum::from_state(const std::vector<uint8_t>& state) {
+    if (state.size() < 16 || std::memcmp(state.data(), STATE_MAGIC, 4) != 0) return nullptr;
+    uint32_t head[3];
+    std::memcpy(head, state.data() + 4, sizeof head);
+    if (head[1] != zxc_state_size() || state.size() != 16 + size_t(head[1])) return nullptr;
+    zxc_t* zx = zxc_create(int(head[2]), SAMPLE_RATE);
     if (!zx) return nullptr;
     std::unique_ptr<Spectrum> s(new Spectrum(zx));
-    if (!zxc_insert_tap(zx, tape.data(), tape.size())) return nullptr;
-    // the 128's menu, Tape Loader (Enter), and the tape read at once through the ROM; then on until
-    // the program waits in a PAUSE (the loading screen, where a .z80 of it is taken), at most 30 s
-    int done = -1;
-    for (int f = 0; f < 1500; f++) {
-        bool untouched = zxc_tape_left(zx) == tape.size();
-        if (untouched && f % 100 == 60) zxc_key(zx, 0x0D, true);
-        if (f % 100 == 64) zxc_key(zx, 0x0D, false);
-        zxc_run_frame(zx);
-        if (done < 0 && zxc_tape_left(zx) == 0) done = f;
-        uint16_t pc = zxc_regs(zx).pc;
-        if (done >= 0 && f - done >= 10 && pc >= 0x1F3A && pc <= 0x1F54) break;  // ROM PAUSE (0x1F3A)
-    }
-    if (done < 0) return nullptr;
-    float drop[1024];
-    while (zxc_audio(zx, drop, 1024) > 0) {}  // the boot's sound is not the game's
+    if (!zxc_load_state(zx, head[0], state.data() + 16)) return nullptr;
     return s;
 }
 

@@ -34,11 +34,29 @@ void zxc_destroy(zxc_t* zx);
 int zxc_model(const zxc_t* zx);
 bool zxc_load_z80(zxc_t* zx, const uint8_t* data, size_t size);
 
-// Put a .tap image in the tape deck: whatever the program loads through the ROM (LD-BYTES,
-// 0x0556 of the 48K BASIC ROM) comes from it at once, block by block. false: not a .tap.
+// Put a .tap image in the tape deck: what the program loads through the ROM (LD-BYTES, 0x0556
+// of the 48K BASIC ROM) comes from it at once, block by block; other loaders get the tape played
+// on EAR in real time (it starts the first time LD-BYTES is reached for anything but a load).
+// false: not a .tap.
 bool zxc_insert_tap(zxc_t* zx, const uint8_t* data, size_t size);
-// Bytes of the tape not read yet (0: none inserted, or all read).
+// The same for a .tzx made of standard-speed blocks (and text / info / group / pause blocks).
+// false: not a .tzx, or one with blocks not supported yet (turbo, pure tones...).
+bool zxc_insert_tzx(zxc_t* zx, const uint8_t* data, size_t size);
+// Bytes of the tape not read (or played) yet (0: none inserted, or all of it).
 size_t zxc_tape_left(const zxc_t* zx);
+// The tape is playing on EAR now.
+bool zxc_tape_playing(const zxc_t* zx);
+// A game's own copy of LD-BYTES done at once too (A = flag, IX = where, DE = how many; always a
+// load), instead of playing the tape to it: much faster, but only right for a loader that works
+// as the ROM's does (Spectrum::from_tape checks the program started, else plays the tape).
+void zxc_set_fast_load(zxc_t* zx, bool on);
+
+// The whole machine's state (CPU, memory, ULA, AY...), to keep and restore later: a buffer of
+// zxc_state_size() bytes; zxc_save_state returns its version, zxc_load_state wants it back (false: a
+// state from another version). Hooks, turbo and the tape are not part of it.
+size_t zxc_state_size(void);
+uint32_t zxc_save_state(zxc_t* zx, void* out);
+bool zxc_load_state(zxc_t* zx, uint32_t version, const void* state);
 
 // Run one 50 Hz frame (20 ms of emulated time).
 void zxc_run_frame(zxc_t* zx);

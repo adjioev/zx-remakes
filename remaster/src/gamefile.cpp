@@ -75,6 +75,11 @@ const std::vector<GameInfo> GAMES = {
      // (availability: "Available"); BALLBREA.TAP inside
      "https://spectrumcomputing.co.uk/pub/sinclair/games/b/BallBreaker.tap.zip", "spectrumcomputing.co.uk",
      "BallBreaker.tap.zip, 23 KB"},
+    {GameId::BallBreaker2, "ballbreaker2", "Ballbreaker II", "Ballbreaker II (CRL, 1988) .tzx, or the zip it came in",
+     // https://spectrumcomputing.co.uk/entry/385/ZX-Spectrum/Ballbreaker_II ("Available"); its .tap is
+     // broken (the converted loader verifies the main block instead of loading it): the .tzx
+     "https://spectrumcomputing.co.uk/pub/sinclair/games/b/BallbreakerII.tzx.zip", "spectrumcomputing.co.uk",
+     "BallbreakerII.tzx.zip, 22 KB"},
 };
 
 const GameInfo& game_info(GameId id) {
@@ -98,6 +103,12 @@ const std::vector<GameVariant> GAME_VARIANTS = {
     // TOSEC's "[t][128K].tap": BASIC "Ballbreak" (its trainer only on T), "balloader", screen,
     // code. Loaded, its game code is the .z80's.
     {GameId::BallBreaker, "BALLBREA.TAP", "7fa2b0dfbc642eed7b410545c09e82a861abf262", FileFormat::Tap},
+    // TOSEC "Ball Breaker (1987)(CRL Group)[128K].tzx": the original loader (a copy of the ROM's,
+    // played by the signal)
+    {GameId::BallBreaker, "Ball Breaker (1987)(CRL Group)[128K].tzx", "22827bc544b3251ec7e0022c094b6e9c209f3ae5",
+     FileFormat::Tzx},
+    // "Ballbreaker II.tzx" in BallbreakerII.tzx.zip (Spectrum Computing)
+    {GameId::BallBreaker2, "Ballbreaker II.tzx", "39aed3792b2e5980e9d579b33e6341a24191acab", FileFormat::Tzx},
 };
 
 std::optional<LoadedGame> identify(const std::vector<uint8_t>& data) {
@@ -213,11 +224,13 @@ std::vector<LoadedGame> adopt_dropped(const std::string& path, const std::string
         bool have = false;
         for (const auto& g : found) have |= g.variant->game == game->variant->game;
         if (have) continue;
-        // saved as <key>.z80 / <key>.tap; one copy per game (the other format's goes)
+        // saved as <key>.z80 / .tap / .tzx; one copy per game (another format's goes)
         const std::string base = dir + game_info(game->variant->game).key;
-        const bool tap = game->variant->format == FileFormat::Tap;
-        std::filesystem::remove(base + (tap ? ".z80" : ".tap"), ec);
-        std::ofstream out(base + (tap ? ".tap" : ".z80"), std::ios::binary);
+        const char* ext = game->variant->format == FileFormat::Tap ? ".tap"
+                          : game->variant->format == FileFormat::Tzx ? ".tzx" : ".z80";
+        for (const char* other : {".z80", ".tap", ".tzx"})
+            if (std::string(other) != ext) std::filesystem::remove(base + other, ec);
+        std::ofstream out(base + ext, std::ios::binary);
         out.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
         if (!out) {
             error = "Could not save the file to " + dir;

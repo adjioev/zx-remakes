@@ -11,7 +11,7 @@
 
 // Adding a game: an id here, a GAMES entry, its releases in GAME_VARIANTS (gamefile.cpp),
 // and optionally an HD module (games.cpp); without one it plays with the original graphics.
-enum class GameId { BallBreaker };
+enum class GameId { BallBreaker, BallBreaker2 };
 
 struct GameInfo {
     GameId id;
@@ -27,7 +27,7 @@ extern const std::vector<GameInfo> GAMES;
 const GameInfo& game_info(GameId id);
 const GameInfo* game_by_key(const std::string& key);
 
-enum class FileFormat { Z80, Tap };
+enum class FileFormat { Z80, Tap, Tzx };
 
 // A release (file) of a game the remake's addresses are mapped for.
 struct GameVariant {
