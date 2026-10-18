@@ -8,6 +8,7 @@
 
 #include <rlgl.h>
 
+#include "glsl.h"
 #include "jpeg.h"
 
 namespace {
@@ -443,7 +444,7 @@ BBStudio::BBStudio(const std::string& dir) : dir_(dir) {
         SetTextureWrap(engrave_, TEXTURE_WRAP_REPEAT);
     }
     set_world(BBWorld::Jungle);
-    shader_ = LoadShaderFromMemory(VS, FS);
+    shader_ = LoadShaderFromMemory(glsl(VS).c_str(), glsl(FS).c_str());
     loc_light_ = GetShaderLocation(shader_, "lightDir");
     loc_metal_ = GetShaderLocation(shader_, "metal");
     loc_gloss_ = GetShaderLocation(shader_, "gloss");

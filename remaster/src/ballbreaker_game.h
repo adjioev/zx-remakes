@@ -99,6 +99,7 @@ public:
 
     bool letters_free() const override { return mode_ != Mode::NameEntry; }
     bool hides_pointer() const override { return mode_ == Mode::Play && !shown_original_; }
+    bool steers() const override { return mode_ == Mode::Play; }
     bool take_options() override { return std::exchange(options_taken_, false); }
     bool take_exit() override { return std::exchange(exit_taken_, false); }
     Escape escape() override;
@@ -110,6 +111,8 @@ public:
     std::unique_ptr<MusicRemix> make_remix(int sample_rate) const override;
     void take_sfx(std::vector<SfxEvent>& out) override;
     void set_remake(bool on) override { remake_ = on; }
+    std::string view_changed(Spectrum& s, bool original) override;
+    void set_original_speed(bool on);
     bool music_restarted() override { return std::exchange(music_restarted_, false); }
 
     // Where the game is, from the code it ran last frame.
@@ -295,6 +298,10 @@ private:
     void read_menu(const Spectrum&, BBMenu&) const;
     // The mouse: the bat is steered to the point of its rail nearest the pointer (the joystick held
     // that way until it is there, so it keeps the original's speed); the HD view marks that point
+    int pick_ = -1;  // a menu item clicked (tapped), the bar on its way to it
+    int walk_ = -1;
+    float drag_target_ = -1;  // a finger steering: where the bat goes (-1 none)
+    bool drag_on_ = false;  // the item a swipe steps to, the bar on its way
     bool shown_original_ = false;  // the R view (the pointer is the system's there)
     float aim_ = -1;               // the bat centre's X the mouse asks for (-1: not steering)
     bool click_was_ = false;       // the mouse button, as it was at the last input (a click is its press)

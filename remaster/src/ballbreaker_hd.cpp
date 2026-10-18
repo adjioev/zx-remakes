@@ -9,6 +9,7 @@
 #include <rlgl.h>
 
 #include "bb_studio.h"
+#include "glsl.h"
 
 namespace {
 
@@ -341,7 +342,7 @@ BBRenderer::BBRenderer(const std::string& fonts_dir, const std::string& intro, c
     half_a_ = LoadRenderTexture(W / 4, H / 4);
     half_b_ = LoadRenderTexture(W / 4, H / 4);
     for (auto* t : {&glow_, &half_a_, &half_b_}) SetTextureFilter(t->texture, TEXTURE_FILTER_BILINEAR);
-    blur_ = LoadShaderFromMemory(nullptr, BLUR_FS);
+    blur_ = LoadShaderFromMemory(nullptr, glsl(BLUR_FS).c_str());
     blur_dir_loc_ = GetShaderLocation(blur_, "dir");
 }
 

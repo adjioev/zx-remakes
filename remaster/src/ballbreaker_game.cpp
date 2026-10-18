@@ -907,6 +907,7 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         apply(s, keys, joy);
         return;
     }
+    if (mode_ != Mode::Play) drag_target_ = -1, drag_on_ = false;  // (a new level, a new game: from the bat)
     switch (mode_) {
     case Mode::Boot:  // the loading screen waits for any key
         if (c.any()) keys.insert(' ');
@@ -918,25 +919,36 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         menu_dirs_ = c.dirs;
         // the mouse: the item under it is chosen (the game's bar walked there with its keys, the
         // arrow put there), a click on the chosen one takes it (as the HD view lays them out)
+        // a click (a tap) takes the item under it: the bar walks there first (a touch has no hover)
+        int under = -1;
         if (c.mouse && screen_ == BBMenu::Screen::Main && !shown_original_ && !title_now()) {
-            const float dx = c.pointer.x - BBRenderer::W / 2.0f, dy = c.pointer.y - 380 + 35;
-            const int under = std::fabs(dx) <= 320 && dy >= 0 && dy < 8 * 70 ? int(dy / 70) : -1;
-            if (under >= 0) {
-                const int game_item = std::min(under, 5);
-                if (cursor_ == game_item) extra_ = under >= 6 ? under - 5 : 0;
-                const int chosen = extra_ ? 5 + extra_ : cursor_;
-                if (clicked && chosen == under) {
-                    if (extra_) (extra_ == 1 ? options_taken_ : exit_taken_) = wait_release_ = true;
-                    else keys.insert(MENU_SELECT);
-                } else if (cursor_ != game_item) {
-                    extra_ = 0;
-                    if (g_.menu_pointer) {
-                        cursor_ = game_item;
-                        s.poke(g_.menu_pointer, 0x80), s.poke(uint16_t(g_.menu_pointer + 1), uint8_t(0x58 + 16 * cursor_ + 2));
-                    } else if (frame_ % 4 < 2) keys.insert(game_item < cursor_ ? MENU_UP : MENU_DOWN);  // a press at a time
-                }
-                break;
+            // (as the HD view lays them out: the Adventure look's rows are closer)
+            const bool adv = hd_ && hd_->theme() == BBTheme::Studio;
+            const float top = adv ? 330 : 380, row = adv ? 62 : 70, half = adv ? 300 : 320;
+            const float dx = c.pointer.x - BBRenderer::W / 2.0f, dy = c.pointer.y - top + row / 2;
+            under = std::fabs(dx) <= half && dy >= 0 && dy < 8 * row ? int(dy / row) : -1;
+        }
+        if (clicked && under >= 0) pick_ = under;
+        if (c.step && pick_ < 0 && walk_ < 0)  // a swipe: the next item up or down
+            walk_ = std::clamp((extra_ ? 5 + extra_ : cursor_) + c.step, 0, 7);
+        if (screen_ != BBMenu::Screen::Main || shown_original_ || title_now()) pick_ = walk_ = -1;
+        if (const int want = under >= 0 ? under : pick_ >= 0 ? pick_ : walk_; want >= 0) {
+            const int game_item = std::min(want, 5);
+            if (cursor_ == game_item) extra_ = want >= 6 ? want - 5 : 0;
+            const int chosen = extra_ ? 5 + extra_ : cursor_;
+            if (walk_ >= 0 && chosen == walk_) walk_ = -1;  // there
+            if (pick_ >= 0 && chosen == pick_) {
+                pick_ = -1;
+                if (extra_) (extra_ == 1 ? options_taken_ : exit_taken_) = wait_release_ = true;
+                else keys.insert(MENU_SELECT);
+            } else if (cursor_ != game_item) {
+                extra_ = 0;
+                if (g_.menu_pointer) {
+                    cursor_ = game_item;
+                    s.poke(g_.menu_pointer, 0x80), s.poke(uint16_t(g_.menu_pointer + 1), uint8_t(0x58 + 16 * cursor_ + 2));
+                } else if (frame_ % 4 < 2) keys.insert(game_item < cursor_ ? MENU_UP : MENU_DOWN);  // a press at a time
             }
+            break;
         }
         if (screen_ != BBMenu::Screen::Main || shown_original_) extra_ = 0;
         else if (extra_) {
@@ -966,7 +978,7 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
     }
     case Mode::NameEntry:  // the keyboard as it is; the gamepad can only finish
         keys = c.keys;
-        if (c.ok && !c.keys.count(' ')) keys.insert(0x0D);
+        if ((c.ok || clicked) && !c.keys.count(' ')) keys.insert(0x0D);  // (a click, a tap: done)
         break;
     case Mode::Screen:  // a page waiting for any key
         if (back_frames_ > 0 && instructions_active_ && instructions_sp_ && g_.instructions_entry == 0xAE11) {
@@ -998,24 +1010,43 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
             }
             instructions_dir_ = dir;
             if (c.dirs & (ZXC_JOY_LEFT | ZXC_JOY_RIGHT)) break;
+            if (clicked && c.pointer.x >= 0 && (c.pointer.x < BBRenderer::W / 3.0f || c.pointer.x > BBRenderer::W * 2 / 3.0f)) {
+                // a click (a tap) on the left or right third: the page before or after
+                BBMenu menu;
+                read_menu(s, menu);
+                int pages = std::max(1, int((menu.items.size() + BBMenu::INSTRUCTIONS_PER_PAGE - 1) /
+                                            BBMenu::INSTRUCTIONS_PER_PAGE));
+                int page = instructions_page_ >= 0 ? instructions_page_ : int(menu.since / 6) % pages;
+                instructions_page_ = (page + (c.pointer.x < BBRenderer::W / 3.0f ? -1 : 1) + pages) % pages;
+                break;
+            }
         }
         if (c.ok || c.fire || c.dirs || clicked) keys.insert(' ');
         break;
     case Mode::Play: {
+        // a finger steering (a touch screen): the bat moved by its moves along the rail (a little
+        // more than the finger), from where the bat is when it goes down; let go, the bat stays
+        if (c.drag) {
+            const float bat = engine_play() ? engine_.bat_x() : float(s.peek(BAT_CENTRE));
+            if (!drag_on_) drag_target_ = bat, drag_on_ = true;
+            const float along = rail_x(s, c.drag_by) - rail_x(s, {0, 0});
+            drag_target_ = std::clamp(drag_target_ + along * 1.4f, 0.0f, float(BB_ROOM_WIDTH));
+        } else drag_on_ = false;
+        if (c.dirs) drag_target_ = -1;  // the keys (a pad) take over
         // the bat runs along the right-hand edge, lower left to upper right: up is right
         if (c.dirs & (ZXC_JOY_LEFT | ZXC_JOY_DOWN)) joy |= ZXC_JOY_LEFT;
         if (c.dirs & (ZXC_JOY_RIGHT | ZXC_JOY_UP)) joy |= ZXC_JOY_RIGHT;
         if (c.fire || c.click) joy |= ZXC_JOY_FIRE;
         if (engine_play()) {  // the remake plays: the game sees nothing
             bat_dir_ = bool(joy & ZXC_JOY_RIGHT) - bool(joy & ZXC_JOY_LEFT);
-            bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : -1;
+            bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : drag_target_;
             engine_fire_ = joy & ZXC_JOY_FIRE;
             joy = 0, aim_ = -1;
             break;
         }
         if (hybrid()) {  // the remake moves the bat (hybrid_bat): the game sees fire only
             bat_dir_ = bool(joy & ZXC_JOY_RIGHT) - bool(joy & ZXC_JOY_LEFT);
-            bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : -1;
+            bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : drag_target_;
             joy &= ZXC_JOY_FIRE;
             aim_ = -1;
             break;
@@ -1025,9 +1056,9 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         if (bat_last_ >= 0 && centre != bat_last_ && std::abs(centre - bat_last_) <= 6) bat_step_ = std::abs(centre - bat_last_);
         bat_last_ = centre;
         aim_ = -1;
-        if (c.mouse) {
+        if (c.mouse || drag_target_ >= 0) {
             // held while that brings it nearer: within half a step it stays
-            aim_ = std::max(0.0f, rail_x(s, c.pointer));  // (beyond the rail's ends: its end)
+            aim_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : drag_target_;  // (beyond the rail's ends: its end)
             float d = aim_ - float(centre);
             if (std::fabs(d) > (fast_mouse_ ? 1 : bat_step_ * 0.5f)) joy |= d > 0 ? ZXC_JOY_RIGHT : ZXC_JOY_LEFT;
         }
@@ -1097,16 +1128,30 @@ std::string BallBreakerView::on_key(Spectrum&, int key) {
     if (key == KEY_O) {
         // the remake's even pace (a game pass a frame, CPU headroom where the original slows down,
         // the ball on a steady 25 Hz) or the original's own, slowdowns and all
-        original_speed_ = !original_speed_;
-        modern_previous_body_.reset(); even_pending_paddle_centre_.reset(); modern_pending_hit_.reset(); modern_event_clock_.reset(); even_paddle_clock_.reset(); even_previous_paddle_clock_.reset(); modern_last_ball_tick_=modern_last_contact_tick_=0; modern_episode_=false;
-        preview_.clear();
-        paddle_motion_.clear(); contact_motion_.clear();
+        set_original_speed(!original_speed_);
         // (a level the remake plays, or the game's own, is played out as it began: from the next one)
         const bool later = engine_level_ || (mode_ == Mode::Play && !original_speed_ && engine_enabled_);
         const char* when = later ? " (FROM THE NEXT SCREEN)" : "";
         return std::string(original_speed_ ? (preview_on() ? "SPEED: ORIGINAL / SMOOTH" : "SPEED: ORIGINAL") : "SPEED: EVEN") + when;
     }
     return "";
+}
+
+void BallBreakerView::set_original_speed(bool on) {
+    original_speed_ = on;
+    modern_previous_body_.reset(); even_pending_paddle_centre_.reset(); modern_pending_hit_.reset(); modern_event_clock_.reset(); even_paddle_clock_.reset(); even_previous_paddle_clock_.reset(); modern_last_ball_tick_=modern_last_contact_tick_=0; modern_episode_=false;
+    preview_.clear();
+    paddle_motion_.clear(); contact_motion_.clear();
+}
+
+std::string BallBreakerView::view_changed(Spectrum& s, bool original) {
+    // the 1987 view plays as in 1987 (the game's own rules and pace), the remastered one as the
+    // remake does (Even: its engine). In play the level starts again under them (score and lives kept).
+    if (original == original_speed_) return "";
+    const bool restart = mode_ == Mode::Play && can_jump();
+    if (restart) jump_to(s, level(s));  // (first: it leaves the remake's play as that play needs)
+    set_original_speed(original);
+    return restart ? "  -  SCREEN RESTARTS" : "";
 }
 
 BBState BallBreakerView::read_state(const Spectrum& s) const {
@@ -1639,6 +1684,7 @@ void BallBreakerView::jump_to(Spectrum& s, int level) {
 }
 
 void BallBreakerView::engine_start(Spectrum& s) {
+    drag_target_ = -1, drag_on_ = false;  // (the bat starts where the level puts it)
     // the level as the game has built it (each brick's cell, kind and sprite), the kinds' points and
     // handlers, the bat's shape: the remake plays it
     BBEngineRules rules;

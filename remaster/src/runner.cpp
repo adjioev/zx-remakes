@@ -40,6 +40,7 @@
 
 #include "audio.h"
 #include "game.h"
+#include "touch.h"
 #include "gamefile.h"
 #include "gamepad.h"
 #include "music_remix.h"
@@ -60,6 +61,9 @@ struct Held {
     bool pa = false, pb = false, px = false;
     bool mouse = false, click = false;  // the mouse steering, its left button
     Vector2 pointer{-1, -1};            // in canvas pixels
+    int step = 0;                       // a swipe up / down in a menu: -1 / +1
+    bool drag = false;                  // a finger steering, and its move this frame (canvas pixels)
+    Vector2 drag_by{0, 0};
 };
 
 // The PC keys that reach the game, by script name.
@@ -113,7 +117,8 @@ Controls controls_of(const Held& h) {
     c.ok = enter || on(KEY_SPACE) || h.pa;
     c.pad_b = h.pb;
     c.pad_x = h.px;
-    c.mouse = h.mouse && !c.dirs, c.pointer = h.pointer, c.click = h.click;
+    c.mouse = h.mouse && !c.dirs, c.pointer = h.pointer, c.click = h.click, c.step = h.step;
+    c.drag = h.drag, c.drag_by = h.drag_by;
     for (int i = 0; i < 26; i++)
         if (on(KEY_A + i)) c.keys.insert('a' + i);
     for (int i = 0; i < 10; i++)
@@ -258,6 +263,71 @@ void draw_pause(Vector2 size, const std::string& title, const std::string& help,
     text("GAMEPAD   Start: resume     Select: back", 56, 836, 23, muted, 1288);
 }
 
+#ifdef __ANDROID__
+// The pause screen for a finger: big buttons, each a key the runner already knows.
+void draw_pause_touch(Vector2 size, const std::string& help, bool original, bool music, bool effects, int picker, int levels,
+                      bool options, Vector2 pointer, std::vector<PauseHit>& hits, const GameView::PauseStyle& st) {
+    hits.clear();
+    auto value = [&](char key) {  // "T  Theme: Adventure 3D" -> "THEME: ADVENTURE 3D"
+        std::istringstream in(help);
+        for (std::string line; std::getline(in, line);)
+            if (line.size() > 3 && line[0] == key && line[1] == ' ') {
+                std::string v = line.substr(line.find_first_not_of(' ', 1));
+                for (char& ch : v) ch = char(std::toupper(static_cast<unsigned char>(ch)));
+                return v;
+            }
+        return std::string();
+    };
+    const float k = std::min(size.x / 1920, size.y / 1080), ox = (size.x - 1920 * k) / 2, oy = (size.y - 1080 * k) / 2;
+    DrawRectangle(0, 0, int(size.x), int(size.y), Fade(BLACK, 0.72f));
+    auto label = [&](const std::string& t, Vector2 c, float px, Color col) {
+        float sz = px * k;
+        while (sz > 10 && style_width(st, t, sz) > 480 * k) sz -= 2;
+        const float w = style_width(st, t, sz);
+        style_text(st, t, {c.x - w / 2, c.y - sz / 2}, sz, col);
+    };
+    label(options ? "OPTIONS" : "PAUSED", {ox + 960 * k, oy + 80 * k}, 64, st.accent);
+    auto button = [&](float x, float y, float w, float h, const std::string& t, int key, bool lit = false) {
+        const Rectangle r{ox + x * k, oy + y * k, w * k, h * k};
+        hits.push_back({r, key});
+        const bool over = CheckCollisionPointRec(pointer, r);
+        DrawRectangleRounded(r, 0.25f, 8, over ? st.hover : st.key);
+        DrawRectangleRoundedLinesEx(r, 0.25f, 8, 3 * k, lit ? st.accent : Fade(st.accent, 0.55f));
+        label(t, {r.x + r.width / 2, r.y + r.height / 2}, 48, lit ? st.accent : st.text);
+    };
+    const float W3 = 540, H = 150, X[3] = {90, 690, 1290};
+    button(X[0], 160, W3, H, options ? "BACK" : "RESUME", KEY_ESCAPE, true);
+    button(X[1], 160, W3, H, "GAME LIST", KEY_X);
+    button(X[2], 160, W3, H, original ? "GRAPHICS: 1987" : "GRAPHICS: REMASTERED", KEY_R);
+    button(X[0], 340, W3, H, music ? "MUSIC: ON" : "MUSIC: OFF", KEY_M);
+    button(X[1], 340, W3, H, effects ? "SOUNDS: ON" : "SOUNDS: OFF", KEY_N);
+    if (std::string v = value('T'); !v.empty()) button(X[2], 340, W3, H, v, KEY_T);
+    if (std::string v = value('L'); !v.empty()) button(X[0], 520, W3, H, v, KEY_L);
+    if (std::string v = value('O'); !v.empty()) button(X[1], 520, W3, H, v, KEY_O);
+    if (picker >= 0 && levels > 0) {
+        button(X[0], 760, 240, H, "<", KEY_LEFT);
+        button(X[0] + 300, 760, 1140, H, "PLAY SCREEN " + std::to_string(picker + 1) + " / " + std::to_string(levels), KEY_ENTER);
+        button(X[2] + 300, 760, 240, H, ">", KEY_RIGHT);
+    }
+}
+
+// A medallion for the touch buttons: dark bronze, a gold rim with notches, a light that breathes
+void medallion(Vector2 c, float r, bool down, double t) {
+    const float glow = (down ? 1.0f : 0.55f) + 0.15f * float(std::sin(t * 3));
+    BeginBlendMode(BLEND_ADDITIVE);
+    DrawCircleGradient(c, r * 1.35f, Color{60, 200, 255, uint8_t(90 * glow)}, Color{60, 200, 255, 0});
+    EndBlendMode();
+    DrawCircleGradient(c, r, Color{78, 60, 40, 230}, Color{26, 18, 10, 230});
+    DrawRing(c, r - 7, r, 0, 360, 64, Color{226, 182, 92, 255});
+    DrawRing(c, r - 14, r - 11, 0, 360, 64, Fade(Color{226, 182, 92, 255}, 0.6f));
+    for (int i = 0; i < 16; i++) {  // its notches
+        const float a = float(i) * 2 * PI / 16, ca = std::cos(a), sa = std::sin(a);
+        DrawLineEx({c.x + ca * (r - 22), c.y + sa * (r - 22)}, {c.x + ca * (r - 15), c.y + sa * (r - 15)}, 2, Fade(Color{226, 182, 92, 255}, 0.7f));
+    }
+    if (down) DrawCircleV(c, r - 16, Fade(Color{90, 210, 255, 255}, 0.18f));
+}
+#endif
+
 }  // namespace
 
 GameExit run_game(const LoadedGame& game, const std::string& assets, const std::string& test_dir,
@@ -358,6 +428,24 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
     // in play with the mouse the pointer is the game's: held in the window (a pointer of our own,
     // moved by the mouse's motion, kept inside), let go on the pause screen and in the menus
     bool captured = false;
+#ifdef __ANDROID__
+    // a touch screen: where the steering finger was last, and the on-screen buttons
+    Vector2 last_touch{-1, -1};
+    bool touched = false, fire_down = false;
+    TouchGesture gesture;
+    int swipe_frames = 0;  // a swipe left / right in a menu: held as its direction this many frames
+    uint8_t swipe_dir = 0;
+    Texture2D fire_tex = LoadTexture((assets + "/touch/fire.png").c_str());
+    Texture2D pause_tex = LoadTexture((assets + "/touch/pause.png").c_str());
+    for (Texture2D* tx : {&fire_tex, &pause_tex})
+        if (tx->id) GenTextureMipmaps(tx), SetTextureFilter(*tx, TEXTURE_FILTER_TRILINEAR);
+    auto touch_buttons = [] {
+        const float sw = float(GetScreenWidth()), sh = float(GetScreenHeight()), u = std::min(sw, sh) / 1080.0f;
+        return std::pair{Rectangle{24 * u, 24 * u, 150 * u, 150 * u},                   // II: pause, top left
+                         Rectangle{20 * u, sh / 2 - 60 * u, 240 * u, 240 * u}};  // FIRE: the left side
+    };
+#endif
+    auto esc_pressed = [] { return IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_BACK); };  // (Android's back)
     Vector2 pointer{0, 0};
     std::vector<PauseHit> pause_hits;  // the pause screen's lines the mouse can take
     auto to_canvas = [&](Vector2 m) {
@@ -392,7 +480,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         original = shown_original = flip_to_original = !original;
         flip = 0;  // dissolve into the other view
         set_sound();
-        toast(original ? "ORIGINAL 1987" : "REMASTERED");
+        toast(std::string(original ? "ORIGINAL 1987" : "REMASTERED") + view->view_changed(*spec, original));
     };
     int picker = -1;  // pause screen: the level to jump to, -1 = the game has none
     GameExit exit = GameExit::Quit;
@@ -512,8 +600,14 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         }
         double wall = GetTime();
         if (paused)
+#ifdef __ANDROID__
+            draw_pause_touch(csize, view->help(), original, music_on, effects_on, picker, view->levels(), options_open,
+                             IsMouseButtonDown(MOUSE_BUTTON_LEFT) ? to_canvas(GetMousePosition()) : Vector2{-1, -1}, pause_hits,
+                             view->pause_style(original));
+#else
             draw_pause(csize, info.title, view->help(), original, music_on, effects_on, picker, view->levels(), options_open,
                        test_dir.empty() ? to_canvas(GetMousePosition()) : Vector2{-1, -1}, pause_hits, view->pause_style(original));
+#endif
         if (!paused && wall < toast_until) {
             float a = std::min(1.0f, float(toast_until - wall) / 0.4f);
             const GameView::PauseStyle st = view->pause_style(original);
@@ -603,16 +697,28 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
 
         if (WindowShouldClose()) break;
         pad.update();
+#ifdef __ANDROID__
+        gesture.update();
+#endif
         if (IsKeyPressed(KEY_F11)) ToggleBorderlessWindowed();
         if (flip < 1) flip = std::min(1.0f, flip + GetFrameTime() / FLIP_SECONDS);
         if (IsKeyPressed(KEY_TAB)) toggle_view();
         if (paused) {
             // a click on a line is its key
             int clicked = 0;
+#ifdef __ANDROID__
+            // a tap on a button is its key; a swipe left / right steps the level
+            if (gesture.tap)
+                for (const PauseHit& ph : pause_hits)
+                    if (CheckCollisionPointRec(to_canvas(gesture.at), ph.r)) clicked = ph.key;
+            if (gesture.swipe == TouchGesture::LEFT) clicked = KEY_LEFT;
+            if (gesture.swipe == TouchGesture::RIGHT) clicked = KEY_RIGHT;
+#else
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
                 for (const PauseHit& ph : pause_hits)
                     if (CheckCollisionPointRec(to_canvas(GetMousePosition()), ph.r)) clicked = ph.key;
-            auto key = [&](int k) { return IsKeyPressed(k) || clicked == k; };
+#endif
+            auto key = [&](int k) { return IsKeyPressed(k) || clicked == k || (k == KEY_ESCAPE && IsKeyPressed(KEY_BACK)); };
             int n = view->levels();
             if (picker >= 0 && n > 0) {
                 if (key(KEY_LEFT) || pad.pressed(Pad::LEFT)) picker = (picker + n - 1) % n;
@@ -642,7 +748,12 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                 acc = 0;
                 if (audio) audio->clear();
             }
-        } else if ((IsKeyPressed(KEY_ESCAPE) || pad.pressed(Pad::START) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) &&
+        } else if ((esc_pressed() || pad.pressed(Pad::START) || IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)
+#ifdef __ANDROID__
+                    || (view->steers() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                        CheckCollisionPointRec(GetMousePosition(), touch_buttons().first))
+#endif
+                        ) &&
                    view->escape() != GameView::Escape::Done) {
             paused = true, options_open = view->escape() == GameView::Escape::Options;
             picker = view->levels() > 0 && view->can_jump() ? view->level(*spec) : -1;
@@ -664,6 +775,45 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             for (auto [b, bit] : DIRS)
                 if (pad.down(b)) h.pad_dirs |= bit;
             h.pa = pad.down(Pad::A), h.pb = pad.down(Pad::B), h.px = pad.down(Pad::X);
+#ifdef __ANDROID__
+            // touch: in play the first finger steers (the bat follows it, and stays when it lifts), a
+            // second one or the FIRE button fires; in the menus a tap is a click where it was let go,
+            // a swipe a direction (held a few frames, as a key the game sees)
+            if (view->steers()) {
+                const auto [pause_btn, fire_btn] = touch_buttons();
+                bool fire = false, touching = false;
+                Vector2 at{-1, -1};
+                for (int i = 0; i < GetTouchPointCount(); i++) {
+                    const Vector2 p = GetTouchPosition(i);
+                    if (CheckCollisionPointRec(p, fire_btn)) fire = true;
+                    else if (CheckCollisionPointRec(p, pause_btn)) continue;
+                    else if (!touching) at = p, touching = true;
+                    else fire = true;
+                }
+                // the steering finger: its move, not where it is (put down anywhere, it moves nothing)
+                if (touching && touched) {
+                    const Vector2 a = to_canvas(at), b = to_canvas(last_touch);
+                    h.drag_by = {a.x - b.x, a.y - b.y};
+                }
+                h.drag = touching;
+                last_touch = at, touched = touching;
+                fire_down = fire;
+                h.mouse = false, h.click = fire;
+                swipe_frames = 0;
+            } else {
+                h.mouse = gesture.tap, h.click = gesture.tap;
+                h.pointer = to_canvas(gesture.tap ? gesture.at : gesture.now);
+                // up / down: a step through the menu (the module walks the bar there); left / right: a
+                // direction held a moment (pages)
+                if (gesture.swipe == TouchGesture::UP) h.step = -1;
+                if (gesture.swipe == TouchGesture::DOWN) h.step = 1;
+                if (gesture.swipe == TouchGesture::LEFT) swipe_dir = ZXC_JOY_LEFT, swipe_frames = 3;
+                if (gesture.swipe == TouchGesture::RIGHT) swipe_dir = ZXC_JOY_RIGHT, swipe_frames = 3;
+                if (swipe_frames > 0) h.pad_dirs |= swipe_dir, swipe_frames--;
+                touched = false, fire_down = false;
+            }
+            mouse_on = h.mouse;
+#else
             // the mouse takes over the steering once it moves or clicks, until a direction is held
             Vector2 md = GetMouseDelta();
             h.click = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
@@ -673,6 +823,7 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
                            std::clamp(pointer.y + md.y, 0.0f, float(GetScreenHeight() - 1))};
             h.pointer = to_canvas(captured ? pointer : GetMousePosition());
             h.mouse = mouse_on;
+#endif
             Controls c = controls_of(h);
             if (c.dirs) mouse_on = false;
 
@@ -693,11 +844,13 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             if (acc > step) acc = 0;  // too far behind (e.g. the window was dragged): skip
         }
 
+#ifndef __ANDROID__  // (no pointer to hold on a touch screen)
         if (bool hold = test_dir.empty() && mouse_on && !paused && view->hides_pointer(); hold != captured) {
             if (hold) pointer = GetMousePosition(), DisableCursor();  // (hidden, and kept in the window)
             else EnableCursor(), SetMousePosition(int(pointer.x), int(pointer.y));  // back where it was
             captured = hold;
         }
+#endif
         render();
         BeginDrawing();
         ClearBackground(BLACK);
@@ -705,6 +858,26 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         float scale = std::min(sw / csize.x, sh / csize.y);
         Rectangle dest{(sw - csize.x * scale) / 2, (sh - csize.y * scale) / 2, csize.x * scale, csize.y * scale};
         DrawTexturePro(canvas.texture, {0, 0, csize.x, -csize.y}, dest, {0, 0}, 0, WHITE);
+#ifdef __ANDROID__
+        if (!paused && view->steers()) {  // the touch buttons: the medallions (their art, else drawn)
+            const auto [pause_btn, fire_btn] = touch_buttons();
+            const double tt = GetTime();
+            auto art = [&](const Texture2D& tx, Rectangle r, bool down) {
+                const float k = down ? 0.93f : 1.0f, w = r.width * k, x = r.x + (r.width - w) / 2, y = r.y + (r.height - w) / 2;
+                if (down) {
+                    BeginBlendMode(BLEND_ADDITIVE);
+                    DrawCircleGradient({r.x + r.width / 2, r.y + r.height / 2}, r.width * 0.7f, Color{80, 220, 255, 120}, Color{80, 220, 255, 0});
+                    EndBlendMode();
+                }
+                DrawTexturePro(tx, {0, 0, float(tx.width), float(tx.height)}, {x, y, w, w}, {0, 0}, 0,
+                               down ? WHITE : Color{235, 235, 235, 235});
+            };
+            if (fire_tex.id) art(fire_tex, fire_btn, fire_down);
+            else medallion({fire_btn.x + fire_btn.width / 2, fire_btn.y + fire_btn.height / 2}, fire_btn.width / 2, fire_down, tt);
+            if (pause_tex.id) art(pause_tex, pause_btn, false);
+            else medallion({pause_btn.x + pause_btn.width / 2, pause_btn.y + pause_btn.height / 2}, pause_btn.width / 2, false, tt);
+        }
+#endif
         EndDrawing();
     }
     if (dump_path && !dump.empty())
@@ -719,6 +892,10 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
             std::fclose(f);
         }
     if (captured) EnableCursor();  // the game left with the pointer held: give it back
+#ifdef __ANDROID__
+    for (Texture2D* tx : {&fire_tex, &pause_tex})
+        if (tx->id) UnloadTexture(*tx);
+#endif
     UnloadRenderTexture(canvas);
     for (auto* rt : {&rt_hd, &rt_orig, &rt_blocks})
         if (rt->id) UnloadRenderTexture(*rt);

@@ -36,7 +36,10 @@ struct Controls {
     bool mouse = false;          // the mouse steers: moved or clicked since the last direction key
     Vector2 pointer{-1, -1};     // where it points, in canvas pixels
     bool click = false;          // its left button, held
-    bool any() const { return dirs || fire || ok || pad_b || pad_x || click || !keys.empty(); }
+    int step = 0;                // a swipe through a menu (a touch screen): -1 up, +1 down, this frame
+    bool drag = false;           // a finger steering (a touch screen): it moves the bat by its moves,
+    Vector2 drag_by{0, 0};       // wherever it is put; drag_by: its move this frame, canvas pixels
+    bool any() const { return dirs || fire || ok || pad_b || pad_x || click || drag || !keys.empty(); }
 };
 
 class GameView {
@@ -64,6 +67,8 @@ public:
     virtual Escape escape() { return Escape::Pause; }
     // The module shows where the mouse aims itself now: the runner hides the system pointer.
     virtual bool hides_pointer() const { return false; }
+    // In play (the R view too): a finger on a touch screen steers there, and is not a click.
+    virtual bool steers() const { return false; }
     // Size of the picture the module draws into (the runner fits it into the window).
     virtual Vector2 canvas_size() const { return {1920, 1536}; }
     // Draw the picture into the canvas (already the render target); original: the R view,
@@ -98,6 +103,9 @@ public:
     // The remake (R: or the original 1987 game): its picture, its sound, and the module's own
     // touches (e.g. the tune from the top on a new game, the next level once one is cleared).
     virtual void set_remake(bool) {}
+    // R: the view changed (original: the 1987 one). The module may follow it with the play too;
+    // returns what to add to the toast (e.g. that the level starts again), or "".
+    virtual std::string view_changed(Spectrum&, bool /*original*/) { return ""; }
     // The game started its tune from the top since the last call (the remix starts over with it).
     virtual bool music_restarted() { return false; }
 

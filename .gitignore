@@ -14,3 +14,6 @@ CLAUDE.md
 notes/
 remaster/notes-task.md
 __pycache__/
+# Android: raylib's source (cloned) and the build
+android/raylib/
+android/build/
