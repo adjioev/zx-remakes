@@ -12,7 +12,7 @@ BT="$SDK/build-tools/$(ls "$SDK/build-tools" | sort -V | grep -v rc | tail -1)"
 JAR="$SDK/platforms/android-36/android.jar"
 JDK="${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}"
 OUT="$HERE/build"
-VERSION="$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo dev)"
+VERSION="${VERSION:-$(git -C "$ROOT" describe --tags --always 2>/dev/null || echo dev)}"
 API=26
 mkdir -p "$OUT"
 TC=(-DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a
@@ -50,7 +50,9 @@ rm -rf "$OUT/res" "$OUT/stage" && mkdir -p "$OUT/res/drawable" "$OUT/stage/lib/a
 sips -s format png -z 192 192 "$ROOT/remaster/assets/ballbreaker/adventure/title.jpg" --cropToHeightWidth 1080 1080 \
   --out "$OUT/res/drawable/icon.png" >/dev/null 2>&1 || cp "$ROOT/remaster/assets/ballbreaker/intro.png" "$OUT/res/drawable/icon.png"
 "$BT/aapt2" compile --dir "$OUT/res" -o "$OUT/res.zip"
-sed "s/VERSION_NAME/$VERSION/" "$HERE/AndroidManifest.xml" > "$OUT/AndroidManifest.xml"
+# the version code from v1.2.3: 10203 (dev builds: 1); Android updates only to a bigger one
+CODE=$(echo "$VERSION" | sed -nE 's/^v([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p' | awk '{print $1*10000+$2*100+$3}')
+sed -e "s/VERSION_NAME/$VERSION/" -e "s/VERSION_CODE/${CODE:-1}/" "$HERE/AndroidManifest.xml" > "$OUT/AndroidManifest.xml"
 "$BT/aapt2" link -o "$OUT/base.apk" -I "$JAR" --manifest "$OUT/AndroidManifest.xml" -A "$OUT/apk_assets" \
   --min-sdk-version $API --target-sdk-version 34 "$OUT/res.zip" -0 jpg -0 png -0 ttf
 cp "$OUT/app/libzxremakes.so" "$OUT/stage/lib/arm64-v8a/"
