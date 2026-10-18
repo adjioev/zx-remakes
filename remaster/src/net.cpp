@@ -1,6 +1,13 @@
 #include "net.h"
 
-#ifdef _WIN32
+#ifdef __ANDROID__
+#include "android.h"
+
+bool http_get(const std::string& url, std::vector<uint8_t>& out, int timeout_seconds) {
+    return android_http_get(url, out, timeout_seconds);
+}
+
+#elif defined(_WIN32)
 // windows.h stays in this file: its names clash with raylib's
 #include <windows.h>
 #include <wininet.h>

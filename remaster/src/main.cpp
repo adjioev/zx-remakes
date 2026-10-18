@@ -29,6 +29,11 @@
 #include "game.h"
 #include "gamefile.h"
 #include "net.h"
+#include "touch.h"
+
+#ifdef __ANDROID__
+#include "android.h"
+#endif
 
 namespace {
 
@@ -113,7 +118,9 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
     std::set<int> scripted;  // keys the script presses this frame
     static const std::map<std::string, int> KEYS = {{"enter", KEY_ENTER}, {"escape", KEY_ESCAPE}, {"left", KEY_LEFT},
                                                     {"right", KEY_RIGHT}, {"d", KEY_D}, {"y", KEY_Y}, {"n", KEY_N}};
-    auto pressed = [&](int key) { return IsKeyPressed(key) || scripted.count(key) > 0; };
+    auto pressed = [&](int key) {
+        return IsKeyPressed(key) || scripted.count(key) > 0 || (key == KEY_ESCAPE && IsKeyPressed(KEY_BACK));  // (Android's back)
+    };
     std::string error;
     int sel = 0;
     for (size_t i = 0; i < GAMES.size(); i++)
@@ -150,8 +157,14 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
     std::future<std::pair<std::vector<LoadedGame>, std::string>> download;
     std::string downloading;
     std::optional<GameId> chosen;
+#ifdef __ANDROID__
+    TouchGesture gesture;  // a tap on letting go, swipes to change the game
+#endif
     for (int frame = 0; !WindowShouldClose() && !chosen; frame++) {
         scripted.clear();
+#ifdef __ANDROID__
+        gesture.update();
+#endif
         bool quit = false;
         for (double now = frame / 60.0; step < steps.size() && steps[step].t <= now; step++) {
             const std::string& w = steps[step].what;
@@ -169,7 +182,11 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
         const float bw = 150, bh = 52;
         const Rectangle exit_btn{float(GetScreenWidth()) - bw - 28, float(GetScreenHeight()) - bh - 24, bw, bh};
         const bool over_exit = !ask && CheckCollisionPointRec(GetMousePosition(), exit_btn);
+#ifdef __ANDROID__
+        if (!ask && gesture.tap && CheckCollisionPointRec(gesture.at, exit_btn)) break;
+#else
         if (over_exit && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) break;
+#endif
         if (!test_dir.empty() && steps.empty() && frame == 10) {  // --test without a game: capture this screen, quit
             Image shot = LoadImageFromScreen();
             ExportImage(shot, (test_dir + "/game_list.png").c_str());
@@ -198,10 +215,37 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
         if (update.valid() && update.wait_for(std::chrono::seconds(0)) == std::future_status::ready) newer = update.get();
         if (!newer.empty() && pressed(KEY_U)) OpenURL(DOWNLOAD_PAGE);
         int n = int(GAMES.size());
+        // the cards and the question's buttons (drawn below): a click (a tap) on them
+        const float sw = float(GetScreenWidth()), shh = float(GetScreenHeight());
+        const float card_gap = sw * 0.03f, card_w = std::min(640.0f, (sw * 0.9f - card_gap * float(n - 1)) / float(n));
+        const float card_h = card_w * 0.75f + 90, cards_x = (sw - card_w * float(n) - card_gap * float(n - 1)) / 2, cards_y = shh * 0.2f;
+        auto card_rect = [&](int i) { return Rectangle{cards_x + float(i) * (card_w + card_gap), cards_y, card_w, card_h}; };
+        const float qh = 260, qy = (shh - qh) / 2;  // (the question box, as drawn)
+        const Rectangle yes_btn{sw / 2 - 260, qy + qh - 84, 240, 60}, no_btn{sw / 2 + 20, qy + qh - 84, 240, 60};
+#ifdef __ANDROID__
+        const bool tap = gesture.tap;
+        const Vector2 at = gesture.at;
+        if (!ask && downloading.empty() && gesture.swipe == TouchGesture::LEFT) sel = (sel + 1) % n;
+        if (!ask && downloading.empty() && gesture.swipe == TouchGesture::RIGHT) sel = (sel + n - 1) % n;
+#else
+        const bool tap = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+        const Vector2 at = GetMousePosition();
+#endif
+        int tapped = -1;
+        if (tap && !ask)
+            for (int i = 0; i < n; i++)
+                if (CheckCollisionPointRec(at, card_rect(i))) tapped = i;
+        bool tap_go = false;
+        if (tapped >= 0 && downloading.empty()) {
+            if (tapped == sel) tap_go = true;  // the chosen one again: play it (or fetch it)
+            sel = tapped;
+        }
         const GameInfo& cur = GAMES[size_t(sel)];
-        bool go = pressed(KEY_ENTER) || pressed(KEY_KP_ENTER) || pressed(KEY_SPACE);
+        bool go = pressed(KEY_ENTER) || pressed(KEY_KP_ENTER) || pressed(KEY_SPACE) || tap_go;
+        const bool tap_yes = ask && tap && CheckCollisionPointRec(at, yes_btn);
+        const bool tap_no = ask && tap && CheckCollisionPointRec(at, no_btn);
         if (ask) {  // "download it from ...?"
-            if (go || pressed(KEY_Y)) {
+            if (go || pressed(KEY_Y) || tap_yes) {
                 const GameInfo* g = ask;
                 ask = nullptr, error.clear();
                 downloading = std::string("Downloading ") + g->title + " from " + g->download_from + "...";
@@ -210,7 +254,7 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
                     auto found = download_game(*g, data_dir, err);
                     return std::make_pair(found, err);
                 });
-            } else if (pressed(KEY_ESCAPE) || pressed(KEY_N) || pressed(KEY_BACKSPACE)) {
+            } else if (pressed(KEY_ESCAPE) || pressed(KEY_N) || pressed(KEY_BACKSPACE) || tap_no) {
                 ask = nullptr;
             }
         } else if (downloading.empty()) {
@@ -257,20 +301,33 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
                 };
                 float my = art.y + art.height / 2;
                 if (g.download_url) {
+#ifdef __ANDROID__
+                    line(std::string("TAP  to download it from ") + g.download_from, my - 20, 28, {255, 214, 96, 255});
+#else
                     line(std::string("ENTER  download it from ") + g.download_from, my - 40, 28, {255, 214, 96, 255});
                     line(std::string("or drop your ") + g.drop + " here", my + 10, 22, Fade(RAYWHITE, 0.7f));
+#endif
                 } else {
                     line(std::string("Drop your ") + g.drop + " here", my - 12, 26, Fade(RAYWHITE, 0.8f));
                 }
             }
         }
         float ty = y0 + ch + 60;
+#ifdef __ANDROID__
+        centred("TAP a game to choose it, TAP again to play      BACK  quit", w / 2, ty, 26, Fade(RAYWHITE, 0.75f));
+#else
         centred("LEFT / RIGHT  choose      ENTER  play      F  full screen      ESC  quit", w / 2, ty, 26, Fade(RAYWHITE, 0.75f));
+#endif
         DrawRectangleRounded(exit_btn, 0.3f, 8, over_exit ? Color{255, 214, 96, 255} : Color{36, 36, 46, 255});
         DrawRectangleRoundedLinesEx(exit_btn, 0.3f, 8, 2, {255, 214, 96, 255});
         centred("EXIT", exit_btn.x + bw / 2, exit_btn.y + (bh - 26) / 2, 26, over_exit ? Color{14, 14, 20, 255} : RAYWHITE);
+#ifdef __ANDROID__
+        centred("The original games are not included: they are downloaded here, from the archive.", w / 2, ty + 44, 22,
+                Fade(RAYWHITE, 0.55f));
+#else
         centred("The original games are not included: download them here, or drop your own copies onto this window.", w / 2,
                 ty + 44, 22, Fade(RAYWHITE, 0.55f));
+#endif
         if (!downloading.empty()) centred(downloading.c_str(), w / 2, ty + 88, 22, {255, 214, 96, 255});
         else if (!error.empty()) centred(error.c_str(), w / 2, ty + 88, 22, {255, 110, 90, 255});
         DrawText(VERSION, 16, int(h) - 30, 18, Fade(RAYWHITE, 0.35f));
@@ -286,9 +343,13 @@ std::optional<GameId> pick_game(std::vector<LoadedGame>& games, const std::strin
             std::string q = std::string("Download ") + ask->title + " from " + ask->download_from + "?";
             centred(q.c_str(), w / 2, by + 40, 34, RAYWHITE);
             centred(ask->download_what, w / 2, by + 96, 24, Fade(RAYWHITE, 0.7f));
-            centred("A free archive of ZX Spectrum software. The file stays on this computer.", w / 2, by + 132, 22,
+            centred("A free archive of ZX Spectrum software. The file stays on this device.", w / 2, by + 132, 22,
                     Fade(RAYWHITE, 0.55f));
-            centred("ENTER  yes, download          ESC  no", w / 2, by + 190, 28, {255, 214, 96, 255});
+            for (auto [btn, label] : {std::pair{yes_btn, "YES, DOWNLOAD"}, {no_btn, "NO"}}) {
+                DrawRectangleRounded(btn, 0.3f, 8, {54, 54, 68, 255});
+                DrawRectangleRoundedLinesEx(btn, 0.3f, 8, 2, {255, 214, 96, 255});
+                centred(label, btn.x + btn.width / 2, btn.y + 17, 26, RAYWHITE);
+            }
         }
         EndDrawing();
     }
@@ -321,21 +382,33 @@ int main(int argc, char** argv) {
     // Inside the .app the assets live in Contents/Resources, in a zip next to the binary;
     // otherwise use the source tree. The games are the user's own copies: a path argument,
     // the user data folder, or next to the .app / binary.
+#ifdef __ANDROID__
+    // the assets copied out of the APK; the games: the user's, kept in the app's folder
+    std::string assets = android_assets_dir();
+    std::string data_dir = user_data_dir(WINDOW_TITLE);
+    std::vector<std::string> paths, dirs{data_dir};
+#else
     std::string res = std::string(GetApplicationDirectory()) + "../Resources/";
     if (!DirectoryExists((res + "assets").c_str())) res = GetApplicationDirectory();
     bool bundled = DirectoryExists((res + "assets").c_str());
     std::string assets = args.size() > 1 ? args[1] : bundled ? res + "assets" : PROJECT_ROOT "/assets";
     std::string data_dir = user_data_dir(WINDOW_TITLE);
     std::vector<std::string> paths, dirs{data_dir, GetApplicationDirectory()};
+#endif
     if (!args.empty()) paths.push_back(args[0]);
-#ifndef APP_BUNDLE
+#if !defined(APP_BUNDLE) && !defined(__ANDROID__)
     for (const auto& g : GAMES) dirs.push_back(std::string(PROJECT_ROOT "/../original/") + g.key + "/");  // dev builds
 #endif
     std::vector<LoadedGame> games;
     if (!std::getenv("ZXREMAKES_NO_GAME")) games = find_games(dirs, paths);  // testing the drop screen
 
+#ifdef __ANDROID__
+    SetConfigFlags(FLAG_VSYNC_HINT);
+    InitWindow(0, 0, WINDOW_TITLE);  // the whole screen
+#else
     SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_HIGHDPI | FLAG_VSYNC_HINT);
     InitWindow(1600, 1000, WINDOW_TITLE);
+#endif
     SetExitKey(KEY_NULL);  // Esc pauses in the games; quit from the window
 
     if (!test_dir.empty()) {  // scripted run: straight into the game, no list
@@ -365,5 +438,8 @@ int main(int argc, char** argv) {
         if (run_game(*find(games, *id), assets, "", "") == GameExit::Quit) break;
     }
     CloseWindow();
+#ifdef __ANDROID__
+    std::_Exit(0);  // the whole process: started again, raylib needs its state fresh
+#endif
     return 0;
 }

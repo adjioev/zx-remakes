@@ -6,3 +6,6 @@
 - `zx-roms.h` - ZX Spectrum 48K and 128K ROMs as C arrays, from floooh/chips-test
   (`examples/roms/zx-roms.h`). The ROMs are (c) Amstrad, who allow their distribution with
   emulators.
+- `stb_image.h` - nothings/stb (https://github.com/nothings/stb), public domain (or MIT),
+  v2.30, commit 013ac3beddff3dbffafd5177e7972067cd2b5083, unmodified. Only its JPEG decoder is
+  used (`src/jpeg.c`): raylib's image loader is built without JPEG.

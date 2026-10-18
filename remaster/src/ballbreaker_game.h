@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "ballbreaker_hd.h"
+#include "bb_engine.h"
 #include "ballbreaker_preview.h"
 #include "ballbreaker_paddle_motion.h"
 #include "ballbreaker_contact_motion.h"
@@ -70,6 +71,17 @@ struct BBGame {
     // the result after it; the position the batch started from (a brick hit puts the ball back there),
     // the falling flag (set as the ball leaves the floor past the bat), the slow-ball counter
     uint16_t ball_batch = 0, ball_batch_end = 0, ball_start = 0, ball_falling = 0, ball_slow = 0;
+    uint16_t sound_request = 0;  // the original's effect to play (0xA91D writes it: 4 the bat, 5 a wall)
+    // in a pass, just after the game empties its list of objects to redraw (the pointer at 0x8050;
+    // 0x9B7A adds one): the remake's bat, moved, is put on it as the game's own step would
+    uint16_t redraw_list = 0;
+    // the remake's own play (bb_engine): the bricks' points and kinds (3 bytes a sprite: points / 100,
+    // handler), and a JR $ (inside another instruction) to park the CPU at while it plays a level
+    uint16_t brick_table = 0, park = 0;
+    // the game's own drawing, run from the park so the original pictures follow the remake's play:
+    // the objects on the redraw list (0x8445), the result to the screen (0x81AB), the panel's score,
+    // missiles and lives
+    uint16_t draw_dirty = 0, draw_blit = 0, hud_score = 0, hud_missiles = 0, hud_lives = 0;
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -80,12 +92,14 @@ public:
     void input(Spectrum&, const Controls&) override;
     void after_frame(Spectrum&) override;
     std::string help() const override;
+    PauseStyle pause_style(bool original) const override;
     Vector2 canvas_size() const override { return {float(BBRenderer::W), float(BBRenderer::H)}; }
     void prepare(const Spectrum&, bool original, double t) override;
     void draw(const Spectrum&, bool original, double t) override;
 
     bool letters_free() const override { return mode_ != Mode::NameEntry; }
     bool hides_pointer() const override { return mode_ == Mode::Play && !shown_original_; }
+    bool steers() const override { return mode_ == Mode::Play; }
     bool take_options() override { return std::exchange(options_taken_, false); }
     bool take_exit() override { return std::exchange(exit_taken_, false); }
     Escape escape() override;
@@ -97,6 +111,11 @@ public:
     std::unique_ptr<MusicRemix> make_remix(int sample_rate) const override;
     void take_sfx(std::vector<SfxEvent>& out) override;
     void set_remake(bool on) override { remake_ = on; }
+    std::string view_changed(Spectrum& s, bool original) override;
+    bool layout_quiet(const Spectrum& s) const;
+    void switch_rules(Spectrum& s);
+    void restore_layout(Spectrum& s);
+    void set_original_speed(bool on);
     bool music_restarted() override { return std::exchange(music_restarted_, false); }
 
     // Where the game is, from the code it ran last frame.
@@ -135,7 +154,21 @@ private:
     BBPaddleBody modern_body(const Spectrum&) const;
     void modern_step(Spectrum&, const zxc_regs_t&);
     // Even: the ball flown by the remake (see hybrid_step); the game keeps the bricks, bonuses, creatures
-    bool hybrid() const { return hybrid_ && !original_speed_ && g_.ball_batch; }
+    bool hybrid() const { return hybrid_ && !original_speed_ && g_.ball_batch && !engine_mode(); }
+    // Even: the remake plays the level itself (bb_engine), the game parked meanwhile (BB_ENGINE=0: the
+    // hybrid instead); decided as a level is built, for that level
+    bool engine_mode() const { return engine_enabled_ && !original_speed_ && g_.park; }
+    bool engine_play() const { return engine_level_ && engine_.active(); }
+    void engine_start(Spectrum&);
+    void engine_frame(Spectrum&);
+    BBEngine engine_;
+    bool engine_enabled_ = true, engine_level_ = false, engine_fire_ = false, engine_fast_ = false;
+    bool parked_ = false;  // the CPU is at the park: the game's own level start (its card, the room) is done
+    uint16_t engine_then_ = 0;  // where the parked CPU goes next (the level start, the play's result)
+    std::vector<uint16_t> engine_calls_;  // the game's routines to run from the park (its drawing)
+    int drawn_score_ = -1, drawn_missiles_ = -1, drawn_lives_ = -1;
+    void engine_draw(Spectrum&);
+    BBPaddleShape bat_shape_;
     bool codex_even() const { return !original_speed_ && !hybrid(); }  // the earlier Even (BB1, BB_HYBRID=0)
     bool preview_on() const { return preview_enabled_ && !hybrid(); }
     void hybrid_step(Spectrum&, bool batch);
@@ -144,8 +177,30 @@ private:
         int wx = -1, wz = -1, wdx = 0, wdz = 0;  // what was last written: position, directions
         uint64_t frame = 0, batch = 0;           // the frames of the last move, the last batch
         bool live = false;                       // in flight (from a batch on, until it falls)
+        int bounces = 0;                         // off walls and bricks since the bat: a loop is nudged
+        float boost = 1;                         // option G: faster a little with each bat hit
+        // a bounce off the bat or a wall within the last move: where, and how far through that move
+        // (the HD view puts it in the ball's track: between frames it would cut the corner)
+        // a brick touched by the remake's ball: it has bounced already; the game is shown the ball in
+        // that brick (this point) for its own hit (score, the brick's kind), and its turn is skipped
+        bool probe = false;
+        float probe_x = 0, probe_z = 0;
+        bool contact = false;
+        float contact_at = 1, contact_x = 0, contact_z = 0;
     } hb_;
     bool hybrid_ = true;
+    bool speed_up_ = false;  // option G (Even): the ball gains speed as the bat hits it, until it is lost
+    // Even: the bat moved by the remake too (the game gets no directions): a fractional centre, sped up
+    // from the keys (or the pad), straight after the mouse
+    void hybrid_bat(Spectrum&);
+    float bat_centre(const Spectrum&) const;  // the remake's if it has the bat, else the game's
+    BBPaddleBody hybrid_body(const Spectrum&) const;  // the bat as the HD view draws it (floor X / Z)
+    BBPaddleBody body_at(const Spectrum&, float centre) const;  // the same with its centre there
+    float bat_x_ = -1, bat_v_ = 0;
+    int bat_written_ = -1, bat_dir_ = 0;
+    uint64_t bat_frame_ = 0;
+    int bat_drawn_ = -1;  // the centre the game last redrew the bat at (original pictures)  // the frame of its last move (a game pass can come twice in a frame, or not)
+    float bat_target_ = -1;
     void modern_paddle_move(Spectrum&);
     void publish_modern_hit(Spectrum&, BBPaddleHit, std::optional<uint64_t> tick = {});
     BBPaddleHit resolve_modern_hit(Spectrum&, BBPaddleSweep, BBPaddleBody, float paddle_dx, bool step);
@@ -246,8 +301,17 @@ private:
     void read_menu(const Spectrum&, BBMenu&) const;
     // The mouse: the bat is steered to the point of its rail nearest the pointer (the joystick held
     // that way until it is there, so it keeps the original's speed); the HD view marks that point
+    int pick_ = -1;  // a menu item clicked (tapped), the bar on its way to it
+    int walk_ = -1;
+    int pending_rules_ = -1;  // R in play: the rules to switch to (1 the 1987 ones, 0 the remake's)
+    std::vector<uint8_t> carry_;  // the screen's objects as they stood, put back once it is built again
+    uint16_t carry_end_ = 0;
+    int carry_level_ = -1;
+    float drag_target_ = -1;  // a finger steering: where the bat goes (-1 none)
+    bool drag_on_ = false;  // the item a swipe steps to, the bar on its way
     bool shown_original_ = false;  // the R view (the pointer is the system's there)
     float aim_ = -1;               // the bat centre's X the mouse asks for (-1: not steering)
+    bool click_was_ = false;       // the mouse button, as it was at the last input (a click is its press)
     bool fast_mouse_ = false;      // option U (a cheat): the bat keeps up with the mouse
     int bat_last_ = -1, bat_step_ = 2;  // the bat centre last frame, its last move
     float rail_x(const Spectrum&, Vector2 pointer) const;

@@ -16,6 +16,9 @@ add_executable(zxremakes
   src/runner.cpp
   src/games.cpp
   src/ballbreaker_game.cpp
+  src/bb_engine.cpp
+  src/bb_studio.cpp
+  src/jpeg.c
   src/ballbreaker_hd.cpp
   src/spectrum.cpp
   src/zxcore.c
@@ -60,3 +63,5 @@ target_compile_definitions(zxremakes PRIVATE PROJECT_ROOT="${CMAKE_CURRENT_SOURC
 target_compile_options(zxremakes PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra>)
 # the vendored emulator (third_party/chips) is built as it is, without our warnings
 set_source_files_properties(src/zxcore.c PROPERTIES COMPILE_OPTIONS "-w")
+# (and stb_image, in jpeg.c)
+set_source_files_properties(src/jpeg.c PROPERTIES COMPILE_OPTIONS "-w")

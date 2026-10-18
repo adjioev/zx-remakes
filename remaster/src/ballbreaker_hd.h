@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -76,6 +77,7 @@ struct BBPaddleHit {
 struct BBState {
     double render_delay = BB_RENDER_DELAY;  // how far the picture runs behind the game (s)
     int level = 0;  // 0-based
+    int levels = 1;  // in the game
     int room = 0;   // 0-6: A-G
     int score = 0, missiles = 0, lives = 0;
     bool unlimited_lives = false, unlimited_missiles = false;  // the remake's options
@@ -85,7 +87,10 @@ struct BBState {
     float aim = -1;  // where the mouse sends the bat's centre (X; -1: the mouse isn't steering)
 };
 
-enum class BBTheme { Neon, ClassicHD };
+enum class BBTheme { Neon, ClassicHD, Studio };
+// The Adventure (Studio) look's worlds: the levels go through them in turn
+enum class BBWorld { Jungle, Tomb, Atlantis, Ice, Garden, Castle, Steam, Volcano, Cyber, Alien };
+inline constexpr int BB_WORLDS = 10, BB_WORLD_LEVELS = 5;  // five levels each
 
 class BBRenderer {
 public:
@@ -102,7 +107,9 @@ public:
 
     BBTheme theme() const { return theme_; }
     void set_theme(BBTheme theme) { theme_ = theme; }
-    const char* theme_name() const { return classic() ? "Classic HD" : "Neon / Tron"; }
+    // the Adventure look's lettering, for the pause screen (null: not that look, or no font)
+    const Font* adventure_font() const { return studio() && adv_ui_.texture.id ? &adv_ui_ : nullptr; }
+    const char* theme_name() const { return theme_ == BBTheme::Studio ? "Adventure 3D" : classic() ? "Classic HD" : "Neon / Tron"; }
 
     // The game's sprites (60 x 120 bytes from 0xB9D5), once.
     void load_sprites(const uint8_t* data);
@@ -123,6 +130,9 @@ private:
     std::map<int, Shade> shade_;  // the bat's shadow ahead, on the floor bricks a missile would hit (prepare)
     BBTheme theme_ = BBTheme::Neon;
     bool classic() const { return theme_ == BBTheme::ClassicHD; }
+    bool studio() const { return theme_ == BBTheme::Studio; }
+    std::unique_ptr<class BBStudio> studio_;  // the Studio look's 3D scene (made when first shown)
+    bool studio_draw(const BBState&, double t);  // the play in the Studio look; false: not the play
     void scene(const BBState&, double t, bool glow_pass);
     void room(int room, double t, bool glow_pass);
     void brick(const BBObject&, double t, bool glow_pass);
@@ -133,15 +143,28 @@ private:
     void sprite(const BBObject&, Color tint, double t, bool glow_pass);  // the game's sprite as neon vectors
     void missile(const BBObject&, double t, bool glow_pass);
     void status_bar(const BBState&);
+    void temple_panel(const BBState& s, double t);
+    void sunlight(double t);
+    void ambient(double t);  // the Adventure world's own life: sun, water, snow, embers
+    BBWorld world_of(const BBState& s) const;
+    bool adventure_creature(const BBObject& o, double t);  // false: none for this world
     void effects(double t, bool glow_pass);
     // the menus (end of ballbreaker_hd.cpp)
     void menu_scene(const BBState&, double t, bool glow_pass);
     void level_card(const BBState&, double t, bool glow_pass);
     void text(const char* s, Vector2 centre, float size, Color c, bool big = false) const;
+    const Font& lettering(bool big) const {  // the look's: Cinzel in the Adventure look, else Orbitron
+        const Font& adv = big ? adv_big_ : adv_ui_;
+        return studio() && adv.texture.id ? adv : big ? font_big_ : font_ui_;
+    }
     void text_left(const char* s, Vector2 at, float size, Color c, bool big = false) const;
     void thumbnail(int sprite, Vector2 centre, float scale, double t, bool glow_pass);
     Font font_big_{}, font_ui_{};
+    Font adv_big_{}, adv_ui_{};  // the Adventure look's lettering (Cinzel), if there
     Texture2D intro_{};
+    std::string temple_dir_;  // the Adventure look's art; its panel's boards and icons:
+    Texture2D hud_board_{}, hud_star_{}, hud_heart_{}, hud_missile_{};
+    Texture2D menu_bg_{};  // the menus' picture (the temple's gate)
     Texture2D creatures_{};  // 0x11-0x15, a cell each: the sprite's box plus CREATURE_PAD all round
     void floor_marks(double t, bool glow_pass);
     void update_ball(const BBObject*, double t, float dt);
@@ -159,6 +182,14 @@ private:
         float ang, spin, size, life, max;
         Color c;
     };
+    struct Dust {  // the Adventure look's breaks: a puff drifting, spreading, fading, or a bubble, an ember
+        Vector2 p, v;
+        float r, life, max;
+        int kind = 0;  // 0 dust, 1 a bubble (rising), 2 snow, 3 smoke, 4 an ember (falling, glowing),
+                       // 5 a glow floating up (a spore, a wisp), 6 a petal (fluttering down)
+        Color c{110, 94, 72, 255};
+    };
+    std::vector<Dust> dust_;
     struct Flash {  // a short light pulse at a point
         Vector2 p;
         float radius, life, max;

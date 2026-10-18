@@ -1,4 +1,8 @@
 #include "gamefile.h"
+
+#ifdef __ANDROID__
+#include "android.h"
+#endif
 #include "net.h"
 
 #include <cctype>
@@ -149,7 +153,10 @@ std::string sha1_hex(const std::vector<uint8_t>& data) {
 }
 
 std::string user_data_dir(const std::string& app) {
-#ifdef _WIN32
+#ifdef __ANDROID__
+    (void)app;
+    std::string dir = android_files_dir();  // the app's own folder
+#elif defined(_WIN32)
     const char* base = std::getenv("APPDATA");  // %APPDATA%\<app>
     std::string dir = std::string(base ? base : ".") + "/" + app + "/";
 #elif defined(__APPLE__)
