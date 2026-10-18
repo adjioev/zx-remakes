@@ -739,6 +739,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
     if (g_.level_built) s.on_exec(g_.level_built, [this, sp](const zxc_regs_t&) {
         building_ = false;
         engine_level_ = false, engine_.stop(), parked_ = false;
+        restore_layout(*sp);  // (R in play: the screen as it stood)
         if (engine_mode()) engine_start(*sp);
     });
     s.on_exec(g_.level_start, [this, sp](const zxc_regs_t&) {
@@ -885,6 +886,10 @@ void BallBreakerView::after_frame(Spectrum& s) {
 }
 
 void BallBreakerView::input(Spectrum& s, const Controls& c) {
+    if (pending_rules_ >= 0) {  // R in play: the other rules once the screen is still
+        if (mode_ != Mode::Play) set_original_speed(pending_rules_ == 1), pending_rules_ = -1;
+        else if (layout_quiet(s)) switch_rules(s);
+    }
     std::set<int> keys;
     uint8_t joy = 0;
     const bool clicked = c.click && !click_was_;  // a press of the mouse button
@@ -1144,14 +1149,56 @@ void BallBreakerView::set_original_speed(bool on) {
     paddle_motion_.clear(); contact_motion_.clear();
 }
 
-std::string BallBreakerView::view_changed(Spectrum& s, bool original) {
-    // the 1987 view plays as in 1987 (the game's own rules and pace), the remastered one as the
-    // remake does (Even: its engine). In play the level starts again under them (score and lives kept).
+std::string BallBreakerView::view_changed(Spectrum&, bool original) {
+    // the 1987 view plays by the 1987 rules and pace, the remastered one by the remake's (Even: its
+    // engine). In play the screen carries on as it stands: once nothing is falling or blowing up its
+    // bricks and creatures are taken, the screen is built again under the other rules and they are
+    // put back (score, lives and missiles kept; the ball is served again)
+    pending_rules_ = -1;
     if (original == original_speed_) return "";
-    const bool restart = mode_ == Mode::Play && can_jump();
-    if (restart) jump_to(s, level(s));  // (first: it leaves the remake's play as that play needs)
+    if (mode_ == Mode::Play) {
+        pending_rules_ = original;
+        return original ? "  -  1987 RULES" : "  -  REMAKE RULES";
+    }
     set_original_speed(original);
-    return restart ? "  -  SCREEN RESTARTS" : "";
+    return "";
+}
+
+bool BallBreakerView::layout_quiet(const Spectrum& s) const {
+    // nothing half way: no brick between two layers, none blowing up
+    for (uint16_t a = uint16_t(OBJECTS + 30), end = s.peek16(OBJECTS_END); a + 10 <= end; a = uint16_t(a + 10)) {
+        if (!s.peek(uint16_t(a + 1))) continue;
+        const int sprite = s.peek(uint16_t(a + 3)), kind = s.peek(uint16_t(a + 6));
+        if (sprite >= 0x18 && sprite <= 0x1F) return false;
+        if (kind != 0x11 && kind != 0x15 && s.peek(uint16_t(a + 8)) % 12) return false;
+    }
+    return true;
+}
+
+void BallBreakerView::switch_rules(Spectrum& s) {
+    // the screen's objects as they stand (the remake's play keeps the game's list in step: its
+    // pictures in the 1987 view), then the screen again under the other rules (level_built puts them back)
+    const uint16_t first = uint16_t(OBJECTS + 30), end = s.peek16(OBJECTS_END);
+    carry_.clear();
+    for (uint16_t a = first; a < end; a++) carry_.push_back(s.peek(a));
+    carry_end_ = end, carry_level_ = level(s);
+    jump_to(s, carry_level_);  // (first: it leaves the remake's play as that play needs)
+    set_original_speed(pending_rules_ == 1);
+    pending_rules_ = -1;
+}
+
+void BallBreakerView::restore_layout(Spectrum& s) {
+    // the same screen built afresh: the same objects in the same order; each takes its place as it was
+    // (gone: none), drawn there from the start
+    if (carry_.empty()) return;
+    const uint16_t first = uint16_t(OBJECTS + 30);
+    if (s.peek16(OBJECTS_END) == carry_end_ && level(s) == carry_level_)
+        for (size_t n = 0; n + 10 <= carry_.size(); n += 10) {
+            const uint16_t a = uint16_t(first + n);
+            for (int k = 1; k < 10; k++) s.poke(uint16_t(a + k), carry_[n + size_t(k)]);
+            s.poke(uint16_t(a + 4), carry_[n + 1]), s.poke(uint16_t(a + 5), carry_[n + 2]);  // (nothing to erase)
+        }
+    carry_.clear();
 }
 
 BBState BallBreakerView::read_state(const Spectrum& s) const {

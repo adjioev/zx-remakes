@@ -112,6 +112,9 @@ public:
     void take_sfx(std::vector<SfxEvent>& out) override;
     void set_remake(bool on) override { remake_ = on; }
     std::string view_changed(Spectrum& s, bool original) override;
+    bool layout_quiet(const Spectrum& s) const;
+    void switch_rules(Spectrum& s);
+    void restore_layout(Spectrum& s);
     void set_original_speed(bool on);
     bool music_restarted() override { return std::exchange(music_restarted_, false); }
 
@@ -300,6 +303,10 @@ private:
     // that way until it is there, so it keeps the original's speed); the HD view marks that point
     int pick_ = -1;  // a menu item clicked (tapped), the bar on its way to it
     int walk_ = -1;
+    int pending_rules_ = -1;  // R in play: the rules to switch to (1 the 1987 ones, 0 the remake's)
+    std::vector<uint8_t> carry_;  // the screen's objects as they stood, put back once it is built again
+    uint16_t carry_end_ = 0;
+    int carry_level_ = -1;
     float drag_target_ = -1;  // a finger steering: where the bat goes (-1 none)
     bool drag_on_ = false;  // the item a swipe steps to, the bar on its way
     bool shown_original_ = false;  // the R view (the pointer is the system's there)
