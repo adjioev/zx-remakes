@@ -173,11 +173,20 @@ int pause_key(const std::string& name) {  // a key as the pause screen names it
     return 0;
 }
 
+// Text in the pause style's font (or raylib's own): its width, and drawn
+float style_width(const GameView::PauseStyle& st, const std::string& s, float size) {
+    return st.font ? MeasureTextEx(*st.font, s.c_str(), size, size * 0.06f).x : float(MeasureText(s.c_str(), int(size)));
+}
+void style_text(const GameView::PauseStyle& st, const std::string& s, Vector2 at, float size, Color c) {
+    if (st.font) DrawTextEx(*st.font, s.c_str(), at, size, size * 0.06f, c);
+    else DrawText(s.c_str(), int(at.x), int(at.y), int(size), c);
+}
+
 void draw_pause(Vector2 size, const std::string& title, const std::string& help, bool original, bool music,
-                bool effects, int picker, int levels, bool options, Vector2 pointer, std::vector<PauseHit>& hits) {
+                bool effects, int picker, int levels, bool options, Vector2 pointer, std::vector<PauseHit>& hits,
+                const GameView::PauseStyle& st) {
     hits.clear();
-    const Color panel{17, 22, 31, 255}, muted{155, 166, 183, 255};
-    const Color accent{255, 214, 96, 255}, rule{49, 59, 74, 255};
+    const Color panel = st.panel, muted = st.muted, accent = st.accent, rule = st.rule, white = st.text;
     const float scale = std::min({1.0f, (size.x - 64) / 1400, (size.y - 64) / 900});
     const float x = (size.x - 1400*scale)/2, y = (size.y - 900*scale)/2;
     auto rect = [&](float px, float py, float w, float h, Color c) {
@@ -185,26 +194,30 @@ void draw_pause(Vector2 size, const std::string& title, const std::string& help,
     };
     auto text = [&](const std::string& value, float px, float py, int font, Color c, float width) {
         int actual = std::max(1, int(font*scale));
-        while (actual > 1 && MeasureText(value.c_str(), actual) > width*scale) --actual;
-        DrawText(value.c_str(), int(x+px*scale), int(y+py*scale), actual, c);
+        while (actual > 1 && style_width(st, value, float(actual)) > width*scale) --actual;
+        style_text(st, value, {x+px*scale, y+py*scale}, float(actual), c);
     };
     // a line with a key: the mouse takes it too (it lights up under the pointer)
     auto hit = [&](float px, float py, float w, float h, int key) {
         const Rectangle r{x+px*scale, y+py*scale, w*scale, h*scale};
         if (!key) return;
         hits.push_back({r, key});
-        if (CheckCollisionPointRec(pointer, r)) DrawRectangleRec(r, {48, 58, 78, 255});
+        if (CheckCollisionPointRec(pointer, r)) DrawRectangleRec(r, st.hover);
     };
     auto row = [&](const std::string& key, const std::string& label, float px, float py, float width) {
         hit(px - 8, py - 6, width + 8, 58, pause_key(key));
-        rect(px, py, 90, 46, {36, 44, 58, 255});
+        rect(px, py, 90, 46, st.key);
         text(key, px+12, py+10, 25, accent, 66);
-        text(label, px+110, py+9, 28, RAYWHITE, width-110);
+        text(label, px+110, py+9, 28, white, width-110);
     };
     DrawRectangle(0, 0, int(size.x), int(size.y), Fade(BLACK, 0.65f));
     rect(0, 0, 1400, 900, panel);
     rect(0, 0, 1400, 3, accent);
-    text(options ? "OPTIONS" : "PAUSED", 56, 42, 42, RAYWHITE, 850);
+    if (st.font) {  // a frame round the panel, gold
+        DrawRectangleLinesEx({x - 6*scale, y - 6*scale, 1412*scale, 912*scale}, 3*scale, accent);
+        DrawRectangleLinesEx({x - 12*scale, y - 12*scale, 1424*scale, 924*scale}, 1.5f*scale, Fade(accent, 0.5f));
+    }
+    text(options ? "OPTIONS" : "PAUSED", 56, 42, 42, white, 850);
     text(title, 56, 100, 26, muted, 1288);
     row("ESC", options ? "Back to the menu" : "Resume game", 56, 162, 600);
     row("X", "Back to game list", 740, 162, 604);
@@ -216,7 +229,7 @@ void draw_pause(Vector2 size, const std::string& title, const std::string& help,
         text(std::to_string(picker+1) + " / " + std::to_string(levels), 300, 267, 40, accent, 190);
         text(">", 516, 267, 40, accent, 40);
         hit(732, 300, 612, 40, KEY_ENTER);
-        text("LEFT / RIGHT   Choose", 740, 265, 25, RAYWHITE, 604);
+        text("LEFT / RIGHT   Choose", 740, 265, 25, white, 604);
         text("ENTER          Start level", 740, 307, 25, muted, 604);
     } else text(options ? "The remake's settings" : "Game paused", 56, 280, 28, muted, 1288);
     rect(56, 365, 1288, 1, rule);
@@ -500,12 +513,15 @@ GameExit run_game(const LoadedGame& game, const std::string& assets, const std::
         double wall = GetTime();
         if (paused)
             draw_pause(csize, info.title, view->help(), original, music_on, effects_on, picker, view->levels(), options_open,
-                       test_dir.empty() ? to_canvas(GetMousePosition()) : Vector2{-1, -1}, pause_hits);
+                       test_dir.empty() ? to_canvas(GetMousePosition()) : Vector2{-1, -1}, pause_hits, view->pause_style(original));
         if (!paused && wall < toast_until) {
             float a = std::min(1.0f, float(toast_until - wall) / 0.4f);
-            int w = MeasureText(toast_msg.c_str(), 40) + 60;
-            DrawRectangleRounded({(csize.x - float(w)) / 2, 40, float(w), 64}, 0.4f, 8, Fade(BLACK, 0.7f * a));
-            DrawText(toast_msg.c_str(), int((csize.x - float(w)) / 2) + 30, 52, 40, Fade(RAYWHITE, a));
+            const GameView::PauseStyle st = view->pause_style(original);
+            const float w = style_width(st, toast_msg, 40) + 60;
+            const Rectangle box{(csize.x - w) / 2, 40, w, 64};
+            DrawRectangleRounded(box, 0.4f, 8, st.font ? Fade(st.panel, 0.92f * a) : Fade(BLACK, 0.7f * a));
+            if (st.font) DrawRectangleRoundedLinesEx(box, 0.4f, 8, 2, Fade(st.accent, a));
+            style_text(st, toast_msg, {box.x + 30, 52}, 40, Fade(st.font ? st.accent : RAYWHITE, a));
         }
         EndTextureMode();
     };

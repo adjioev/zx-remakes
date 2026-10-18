@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "ballbreaker_hd.h"
+#include "bb_engine.h"
 #include "ballbreaker_preview.h"
 #include "ballbreaker_paddle_motion.h"
 #include "ballbreaker_contact_motion.h"
@@ -74,6 +75,13 @@ struct BBGame {
     // in a pass, just after the game empties its list of objects to redraw (the pointer at 0x8050;
     // 0x9B7A adds one): the remake's bat, moved, is put on it as the game's own step would
     uint16_t redraw_list = 0;
+    // the remake's own play (bb_engine): the bricks' points and kinds (3 bytes a sprite: points / 100,
+    // handler), and a JR $ (inside another instruction) to park the CPU at while it plays a level
+    uint16_t brick_table = 0, park = 0;
+    // the game's own drawing, run from the park so the original pictures follow the remake's play:
+    // the objects on the redraw list (0x8445), the result to the screen (0x81AB), the panel's score,
+    // missiles and lives
+    uint16_t draw_dirty = 0, draw_blit = 0, hud_score = 0, hud_missiles = 0, hud_lives = 0;
 };
 extern const BBGame BALL_BREAKER, BALL_BREAKER_2;
 
@@ -84,6 +92,7 @@ public:
     void input(Spectrum&, const Controls&) override;
     void after_frame(Spectrum&) override;
     std::string help() const override;
+    PauseStyle pause_style(bool original) const override;
     Vector2 canvas_size() const override { return {float(BBRenderer::W), float(BBRenderer::H)}; }
     void prepare(const Spectrum&, bool original, double t) override;
     void draw(const Spectrum&, bool original, double t) override;
@@ -139,7 +148,21 @@ private:
     BBPaddleBody modern_body(const Spectrum&) const;
     void modern_step(Spectrum&, const zxc_regs_t&);
     // Even: the ball flown by the remake (see hybrid_step); the game keeps the bricks, bonuses, creatures
-    bool hybrid() const { return hybrid_ && !original_speed_ && g_.ball_batch; }
+    bool hybrid() const { return hybrid_ && !original_speed_ && g_.ball_batch && !engine_mode(); }
+    // Even: the remake plays the level itself (bb_engine), the game parked meanwhile (BB_ENGINE=0: the
+    // hybrid instead); decided as a level is built, for that level
+    bool engine_mode() const { return engine_enabled_ && !original_speed_ && g_.park; }
+    bool engine_play() const { return engine_level_ && engine_.active(); }
+    void engine_start(Spectrum&);
+    void engine_frame(Spectrum&);
+    BBEngine engine_;
+    bool engine_enabled_ = true, engine_level_ = false, engine_fire_ = false, engine_fast_ = false;
+    bool parked_ = false;  // the CPU is at the park: the game's own level start (its card, the room) is done
+    uint16_t engine_then_ = 0;  // where the parked CPU goes next (the level start, the play's result)
+    std::vector<uint16_t> engine_calls_;  // the game's routines to run from the park (its drawing)
+    int drawn_score_ = -1, drawn_missiles_ = -1, drawn_lives_ = -1;
+    void engine_draw(Spectrum&);
+    BBPaddleShape bat_shape_;
     bool codex_even() const { return !original_speed_ && !hybrid(); }  // the earlier Even (BB1, BB_HYBRID=0)
     bool preview_on() const { return preview_enabled_ && !hybrid(); }
     void hybrid_step(Spectrum&, bool batch);

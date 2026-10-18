@@ -8,6 +8,8 @@
 
 #include <rlgl.h>
 
+#include "bb_studio.h"
+
 namespace {
 
 constexpr int SPRITES = 60, SPRITE_W = 24, SPRITE_H = 20, SPRITE_BYTES = 120;
@@ -55,6 +57,21 @@ Kind kind_of(int sprite) {
     case 0x29: return {Shape::Cube, {240, 100, 230, 255}};
     default: return {Shape::Cube, plain};
     }
+}
+
+// A brick's shape and colour for the Studio look's 3D scene.
+BBStudio::Look studio_look(int sprite) {
+    const Kind k = kind_of(sprite);
+    int shape = 0;
+    switch (k.shape) {
+    case Shape::Pyramid: shape = 1; break;
+    case Shape::Slabs: shape = 2; break;
+    case Shape::Lying: shape = 3; break;
+    case Shape::Diamond: shape = 4; break;
+    case Shape::Barrel: shape = 5; break;
+    default: break;
+    }
+    return BBStudio::Look{k.colour, shape};
 }
 
 // The 7 rooms, after the original's wall and floor patterns (notes/ballbreaker.md).
@@ -280,6 +297,15 @@ BBRenderer::BBRenderer(const std::string& fonts_dir, const std::string& intro, c
         intro_ = LoadTexture(intro.c_str());
         SetTextureFilter(intro_, TEXTURE_FILTER_BILINEAR);
     }
+    temple_dir_ = creatures.substr(0, creatures.rfind("/creatures/")) + "/adventure";
+    if ((menu_bg_ = bb_load_art(temple_dir_ + "/title")).id) SetTextureFilter(menu_bg_, TEXTURE_FILTER_BILINEAR);
+    for (auto [tex, name] : {std::pair{&hud_board_, "board"}, {&hud_star_, "star"}, {&hud_heart_, "heart"}, {&hud_missile_, "missile"}}) {
+        const std::string f = temple_dir_ + "/hud/" + name + ".png";
+        if (!FileExists(f.c_str())) continue;
+        *tex = LoadTexture(f.c_str());
+        GenTextureMipmaps(tex);
+        SetTextureFilter(*tex, TEXTURE_FILTER_TRILINEAR);
+    }
     if (FileExists(creatures.c_str())) {
         creatures_ = LoadTexture(creatures.c_str());
         GenTextureMipmaps(&creatures_);  // drawn small: mipmaps keep it smooth
@@ -293,6 +319,16 @@ BBRenderer::BBRenderer(const std::string& fonts_dir, const std::string& intro, c
         SetTextureFilter(font_ui_.texture, TEXTURE_FILTER_BILINEAR);
     } else
         font_big_ = font_ui_ = GetFontDefault();
+    if (const std::string c = fonts_dir + "/Cinzel-Black.ttf"; FileExists(c.c_str())) {  // carved capitals
+        adv_big_ = LoadFontEx(c.c_str(), 160, nullptr, 0);
+        GenTextureMipmaps(&adv_big_.texture);
+        SetTextureFilter(adv_big_.texture, TEXTURE_FILTER_TRILINEAR);
+    }
+    if (const std::string c = fonts_dir + "/Cinzel-Bold.ttf"; FileExists(c.c_str())) {
+        adv_ui_ = LoadFontEx(c.c_str(), 64, nullptr, 0);
+        GenTextureMipmaps(&adv_ui_.texture);
+        SetTextureFilter(adv_ui_.texture, TEXTURE_FILTER_TRILINEAR);
+    }
     glow_ = LoadRenderTexture(W, H);
     half_a_ = LoadRenderTexture(W / 4, H / 4);
     half_b_ = LoadRenderTexture(W / 4, H / 4);
@@ -310,7 +346,11 @@ BBRenderer::~BBRenderer() {
     if (classic_sprites_.id) UnloadTexture(classic_sprites_);
     if (intro_.id) UnloadTexture(intro_);
     if (creatures_.id) UnloadTexture(creatures_);
+    for (Texture2D* tx : {&hud_board_, &hud_star_, &hud_heart_, &hud_missile_, &menu_bg_})
+        if (tx->id) UnloadTexture(*tx);
     if (font_big_.texture.id != GetFontDefault().texture.id) UnloadFont(font_big_);
+    if (adv_big_.texture.id) UnloadFont(adv_big_);
+    if (adv_ui_.texture.id) UnloadFont(adv_ui_);
     if (font_ui_.texture.id != GetFontDefault().texture.id) UnloadFont(font_ui_);
 }
 
@@ -1303,6 +1343,72 @@ void BBRenderer::burst(const BBObject& o, int points) {
     float cx = o.x + CUBE / 2, cy = o.y + CUBE / 2, cz = o.z - CUBE / 2;
     Vector2 c = P(cx, cy, cz);
     std::uniform_real_distribution<float> u(0, 1);
+    if (studio() && studio_ && studio_->room()) {  // the Adventure look: chunks, and the world's own puff
+        auto mixc = [](Color a, Color b, float t) {
+            return Color{uint8_t(a.r + (b.r - a.r) * t), uint8_t(a.g + (b.g - a.g) * t), uint8_t(a.b + (b.b - a.b) * t), 255};
+        };
+        const BBWorld w = studio_->world();
+        // the chunks: stone with a trace of its paint; ice; black rock
+        Color base{104, 94, 80, 255};  // stone
+        if (w == BBWorld::Ice) base = {200, 230, 255, 255};
+        else if (w == BBWorld::Volcano || w == BBWorld::Castle) base = {52, 44, 42, 255};
+        else if (w == BBWorld::Atlantis || w == BBWorld::Alien) base = {120, 120, 128, 255};
+        else if (w == BBWorld::Tomb) base = {170, 140, 96, 255};
+        else if (w == BBWorld::Steam || w == BBWorld::Cyber) base = {110, 112, 118, 255};  // metal
+        const Color chunk = mixc(k.colour, base, w == BBWorld::Ice ? 0.75f : 0.86f);
+        for (int i = 0, n = 14 + int(u(rng_) * 9); i < n; i++) {
+            float a = -3.1416f * (0.05f + 0.9f * u(rng_)), sp = 200 + u(rng_) * 420;
+            if (w == BBWorld::Atlantis) sp *= 0.55f;  // (slowed by the water)
+            shards_.push_back({c, {std::cos(a) * sp, std::sin(a) * sp}, u(rng_) * 6.28f, (u(rng_) - 0.5f) * 12,
+                               6 + u(rng_) * 14, 0, 0.6f + u(rng_) * 0.4f, scale(chunk, 0.8f + 0.4f * u(rng_))});
+        }
+        auto puff = [&](int count, int kind, Color col, float size, float speed, float rise, float life) {
+            for (int i = 0; i < count; i++) {
+                float a = u(rng_) * 6.2832f, sp = speed * (0.3f + u(rng_));
+                dust_.push_back({{c.x + std::cos(a) * 24, c.y + std::sin(a) * 16}, {std::cos(a) * sp, std::sin(a) * sp * 0.5f - rise},
+                                 size * (0.6f + 0.8f * u(rng_)), 0, life * (0.7f + 0.6f * u(rng_)), kind, col});
+            }
+        };
+        switch (w) {
+        case BBWorld::Jungle: puff(9, 0, Color{110, 94, 72, 255}, 40, 90, 40, 1.4f); break;
+        case BBWorld::Atlantis:
+            puff(6, 0, Color{150, 140, 110, 255}, 36, 50, 10, 1.6f);  // sand
+            puff(14, 1, Color{210, 245, 255, 255}, 9, 80, 120, 1.6f);  // bubbles
+            break;
+        case BBWorld::Ice: puff(10, 2, Color{235, 245, 255, 255}, 38, 110, 20, 1.2f); break;
+        case BBWorld::Volcano:
+            puff(6, 3, Color{40, 32, 30, 255}, 44, 50, 70, 1.8f);  // smoke
+            puff(14, 4, Color{255, 150, 40, 255}, 4, 380, 260, 0.9f);  // embers
+            break;
+        case BBWorld::Tomb: puff(12, 0, Color{176, 146, 96, 255}, 44, 110, 20, 1.6f); break;  // sand
+        case BBWorld::Garden:
+            puff(5, 0, Color{120, 110, 100, 255}, 34, 70, 30, 1.2f);
+            puff(16, 6, Color{255, 180, 205, 255}, 7, 220, 160, 2.2f);  // petals
+            break;
+        case BBWorld::Castle:
+            puff(6, 3, Color{60, 66, 76, 255}, 40, 50, 30, 1.6f);
+            puff(8, 5, Color{120, 255, 160, 255}, 6, 60, 90, 2.0f);  // wisps
+            break;
+        case BBWorld::Steam:
+            puff(9, 2, Color{230, 230, 225, 255}, 44, 120, 60, 1.4f);  // steam
+            puff(10, 4, Color{255, 190, 90, 255}, 3, 340, 220, 0.7f);  // sparks
+            break;
+        case BBWorld::Cyber:
+            puff(5, 3, Color{40, 36, 56, 255}, 40, 50, 50, 1.4f);
+            for (int i = 0; i < 12; i++) {  // electric sparks
+                float a = u(rng_) * 6.2832f, sp = 700 + u(rng_) * 700;
+                sparks_.push_back({c, {std::cos(a) * sp, std::sin(a) * sp}, 0, 0.12f + u(rng_) * 0.12f,
+                                   i % 3 ? Color{90, 230, 255, 255} : Color{255, 120, 230, 255}});
+            }
+            break;
+        case BBWorld::Alien: puff(16, 5, Color{150, 255, 140, 255}, 6, 90, 80, 2.0f); break;  // spores
+        }
+        const Color warm = bb_world_style(w).glow_in;
+        lights_.push_back({cx, cy, cz, bomb ? 55.f : 24.f, bomb ? 2.0f : 0.8f, 0, 0.3f, warm});
+        if (bomb) flashes_.push_back({c, 260.f, 0, 0.2f, Color{255, 150, 60, 255}});
+        if (points > 0) popups_.push_back({{c.x, c.y - 40}, 0, points});
+        return;
+    }
     int n = 8 + int(u(rng_) * 9);  // 8-16 angular shards
     for (int i = 0; i < n; i++) {
         float a = -3.1416f * (0.05f + 0.9f * u(rng_)) + (u(rng_) < 0.25f ? 3.1416f : 0), sp = 250 + u(rng_) * 500;
@@ -1372,7 +1478,45 @@ void BBRenderer::floor_marks(double t, bool glow) {
 }
 
 void BBRenderer::effects(double, bool glow) {
+    const bool temple = studio() && studio_ && studio_->room();
+    if (temple && !glow) {  // the temple: dust under the chunks, chunks solid
+        for (const Dust& d : dust_) {
+            const float a = 1 - d.life / d.max;
+            const Color c = d.c;
+            if (d.kind == 1) {  // a bubble: a ring with a glint
+                DrawCircleLinesV(d.p, d.r, Color{c.r, c.g, c.b, uint8_t(200 * a)});
+                DrawCircleV({d.p.x - d.r * 0.35f, d.p.y - d.r * 0.35f}, d.r * 0.25f, Color{255, 255, 255, uint8_t(180 * a)});
+            } else if (d.kind == 5) {  // a glow floating up
+                BeginBlendMode(BLEND_ADDITIVE);
+                DrawCircleGradient(d.p, d.r * 3, Color{c.r, c.g, c.b, uint8_t(220 * a)}, Color{c.r, c.g, c.b, 0});
+                EndBlendMode();
+            } else if (d.kind == 6) {  // a petal, turning as it flutters
+                const float ang = d.life * 5 + d.r, ca = std::cos(ang), sa = std::sin(ang), l = d.r, w2 = d.r * 0.5f;
+                const Vector2 p0{d.p.x + ca * l, d.p.y + sa * l}, p1{d.p.x - sa * w2, d.p.y + ca * w2},
+                    p2{d.p.x - ca * l, d.p.y - sa * l}, p3{d.p.x + sa * w2, d.p.y - ca * w2};
+                const Color pc{c.r, c.g, c.b, uint8_t(240 * std::min(1.0f, a * 2))};
+                tri(p0, p1, p2, pc), tri(p0, p2, p3, pc);
+            } else if (d.kind == 4) {  // an ember
+                BeginBlendMode(BLEND_ADDITIVE);
+                DrawCircleGradient(d.p, d.r * 2.5f, Color{c.r, c.g, c.b, uint8_t(255 * a)}, Color{255, 60, 0, 0});
+                EndBlendMode();
+            } else {
+                DrawCircleGradient(d.p, d.r, Color{c.r, c.g, c.b, uint8_t((d.kind == 2 ? 200 : 170) * a * a)}, Color{c.r, c.g, c.b, 0});
+            }
+        }
+        for (const Shard& sh : shards_) {
+            const float a = std::min(1.0f, 3 * (1 - sh.life / sh.max));
+            Vector2 p[4];
+            for (int i = 0; i < 4; i++) {  // a rough four-sided chip
+                const float ang = sh.ang + i * 1.57f + (i & 1 ? 0.35f : 0), rr = sh.size * (i == 2 ? 0.7f : 1.0f);
+                p[i] = {sh.p.x + std::cos(ang) * rr, sh.p.y + std::sin(ang) * rr};
+            }
+            tri(p[0], p[1], p[2], Fade(sh.c, a)), tri(p[0], p[2], p[3], Fade(scale(sh.c, 0.75f), a));
+            line(p[0], p[1], 1.5f, Fade(scale(sh.c, 1.25f), a));  // its lit edge
+        }
+    }
     for (const Shard& sh : shards_) {
+        if (temple) break;
         float a = 1 - sh.life / sh.max, s = sh.size * (0.6f + 0.4f * a);
         Vector2 p[3];
         for (int i = 0; i < 3; i++) {
@@ -1396,6 +1540,12 @@ void BBRenderer::effects(double, bool glow) {
         for (const Popup& u : popups_) {
             float a = 1 - u.life / 1.1f;
             std::string txt = "+" + std::to_string(u.points);
+            if (temple) {  // gold, carved, with a dark rim
+                const Vector2 at{u.p.x, u.p.y - u.life * 120};
+                text(txt.c_str(), {at.x + 2, at.y + 3}, 50, Fade(Color{30, 18, 4, 255}, a));
+                text(txt.c_str(), at, 50, Fade(Color{255, 214, 120, 255}, a));
+                continue;
+            }
             int fs = 56;
             DrawText(txt.c_str(), int(u.p.x - MeasureText(txt.c_str(), fs) / 2), int(u.p.y - u.life * 120), fs, Fade(WHITE, a));
         }
@@ -1410,30 +1560,45 @@ std::vector<const BBObject*> BBRenderer::scene_order(const BBState& s) const {
         if (a->z != b->z) return a->z > b->z;
         return a->y < b->y;
     });
+    // The ball against everything it overlaps on screen: two convex bodies, the sphere is in front
+    // when it lies towards the viewer from the other's nearest point (into the picture is (2, -1, 2)
+    // in X, Y, Z: it projects to a point). The sort above goes by sprite anchors, which puts a ball
+    // beside a brick behind it ("under" it) or over the bat's end; it is placed after the last thing
+    // it is in front of (or before the first it is behind), outside the comparator (a pair-specific
+    // comparison inside stable_sort would not be a strict weak ordering).
     auto ball_it = std::find_if(order.begin(), order.end(), [](auto o) { return o->slot == 0; });
-    auto bat_it = std::find_if(order.begin(), order.end(), [](auto o) { return o->slot == 1; });
-    if (ball_it != order.end() && bat_it != order.end()) {
+    if (ball_it != order.end()) {
         const BBObject* sphere = *ball_it;
-        const BBObject* paddle = *bat_it;
-        const auto body = bat_body(*paddle);
-        // Ball object coordinates are sprite anchors; the paddle uses physical bounds.
-        // Recover the rendered centre, including the bounce height encoded in sy.
+        // the rendered centre (object coordinates are sprite anchors; the bounce height is in sy)
         const float x = sphere->x + 5;
         const float z = 160 + x - (sphere->sx + 12);
         const float y = 118 - x / 2 - (sphere->sy + 10);
-        // Two convex bodies: the sphere is in front when it lies towards the viewer from the paddle's
-        // nearest point to it. Into the picture is (2, -1, 2) in X, Y, Z (it projects to a point).
-        // (A sphere touching an end is in front of it, one at the play face behind it.)
-        const float qx = std::clamp(x, body.x0, body.x1), qy = std::clamp(y, 0.0f, body.height),
-                    qz = std::clamp(z, body.z0, body.z1);
-        const bool in_front = 2 * (x - qx) - (y - qy) + 2 * (z - qz) < 0;
-        if ((ball_it > bat_it) != in_front) {
-            // Correct only this pair, outside the comparator: a pair-specific
-            // comparison inside stable_sort would not be a strict weak ordering.
-            order.erase(ball_it);
-            bat_it = std::find(order.begin(), order.end(), paddle);
-            order.insert(in_front ? bat_it + 1 : bat_it, sphere);
+        const float cu = 160 + x - z, cv = 118 - x / 2 - y, r = BALL_RADIUS + 1;
+        const size_t was = size_t(ball_it - order.begin());
+        order.erase(ball_it);
+        int after = -1, before = -1;
+        for (size_t i = 0; i < order.size(); i++) {
+            const BBObject& o = *order[i];
+            float x0, x1, y0, y1, z0, z1;
+            if (o.slot == 1) {
+                const auto body = bat_body(o);
+                x0 = body.x0, x1 = body.x1, y0 = 0, y1 = body.height, z0 = body.z0, z1 = body.z1;
+            } else if (o.slot >= 3) {
+                x0 = o.x, x1 = o.x + CUBE, y0 = o.y, y1 = o.y + CUBE, z0 = o.z - CUBE, z1 = o.z;
+            } else continue;
+            // overlapping on screen at all? (the box's projected bounds against the ball's)
+            float u0 = 1e9f, u1 = -1e9f, v0 = 1e9f, v1 = -1e9f;
+            for (float px : {x0, x1}) for (float py : {y0, y1}) for (float pz : {z0, z1}) {
+                const float u = 160 + px - pz, v = 118 - px / 2 - py;
+                u0 = std::min(u0, u), u1 = std::max(u1, u), v0 = std::min(v0, v), v1 = std::max(v1, v);
+            }
+            if (cu + r < u0 || cu - r > u1 || cv + r < v0 || cv - r > v1) continue;
+            const float qx = std::clamp(x, x0, x1), qy = std::clamp(y, y0, y1), qz = std::clamp(z, z0, z1);
+            if (2 * (x - qx) - (y - qy) + 2 * (z - qz) < 0) after = int(i);
+            else if (before < 0) before = int(i);
         }
+        const size_t at = after >= 0 ? size_t(after + 1) : before >= 0 ? size_t(before) : was;
+        order.insert(order.begin() + long(std::min(at, order.size())), sphere);
     }
     return order;
 }
@@ -1561,6 +1726,17 @@ void BBRenderer::update_ball(const BBObject* b, double t, float dt) {
 }
 
 void BBRenderer::prepare(const BBState& s, double t) {
+    if (studio()) {  // the Studio look: its reflection pass now, outside the frame's target
+        using Sc = BBMenu::Screen;
+        if (!studio_) studio_ = std::make_unique<BBStudio>(temple_dir_);  // (the menus' brick pictures too)
+        if (s.menu.screen == Sc::None || (s.menu.screen == Sc::LevelCard && s.menu.leave >= 1)) {
+            studio_->set_world(world_of(s));
+            // (during the card the objects are not the level's yet: the room empty)
+            BBState empty;
+            if (s.menu.screen == Sc::LevelCard) empty = s, empty.objects.clear();
+            studio_->prepare(s.menu.screen == Sc::LevelCard ? empty : s, SCALE, studio_look, [this](const BBObject& o) { return bat_body(o); }, slab_lift);
+        }
+    }
     if (s.level != room_level_) room_level_ = s.level, FLOOR_X = ROOM_X, FLOOR_Z = ROOM_Z;
     for (const auto& o : s.objects)
         if (o.slot >= 3 && !(o.sprite >= 0x11 && o.sprite <= 0x1f)) {  // bricks (not aliens, explosions)
@@ -1619,6 +1795,25 @@ void BBRenderer::prepare(const BBState& s, double t) {
         sh.v.y += 1400 * dt;
         sh.ang += sh.spin * dt;
     }
+    for (Dust& d : dust_) {
+        d.life += dt, d.p.x += d.v.x * dt, d.p.y += d.v.y * dt;
+        if (d.kind == 4) {  // embers fly and fall
+            d.v.y += 700 * dt;
+            continue;
+        }
+        if (d.kind == 5) {  // glows drift up, swaying
+            d.v.x *= 1 - 1.2f * dt, d.v.y = d.v.y * (1 - 1.2f * dt) - 40 * dt, d.p.x += 30 * float(std::sin(d.life * 3 + d.r)) * dt;
+            continue;
+        }
+        if (d.kind == 6) {  // petals flutter down
+            d.v.x *= 1 - 1.0f * dt, d.v.y = d.v.y * (1 - 2.0f * dt) + 140 * dt, d.p.x += 40 * float(std::sin(d.life * 4 + d.r)) * dt;
+            continue;
+        }
+        d.v.x *= 1 - 1.5f * dt, d.v.y *= 1 - 1.5f * dt;
+        if (d.kind == 1) d.v.y -= 160 * dt, d.p.x += 20 * float(std::sin(d.life * 9 + d.r)) * dt;  // bubbles rise, wobble
+        else d.r += (d.kind == 3 ? 45.f : 30.f) * dt;
+    }
+    std::erase_if(dust_, [](const Dust& d) { return d.life >= d.max; });
     for (Spark& sp : sparks_) sp.life += dt, sp.p.x += sp.v.x * dt, sp.p.y += sp.v.y * dt, sp.v.x *= 1 - 3 * dt, sp.v.y *= 1 - 3 * dt;
     for (Flash& f : flashes_) f.life += dt;
     for (FloorRing& rg : rings_) rg.life += dt;
@@ -1703,8 +1898,335 @@ void BBRenderer::status_bar(const BBState& s) {
     DrawText(buf, 1500, FIELD_H + 36, 52, label);
 }
 
+bool BBRenderer::studio_draw(const BBState& s, double t) {
+    // the play only (the menus as ever); the level card over the room once it has come in
+    using Sc = BBMenu::Screen;
+    const bool play = s.menu.screen == Sc::None || (s.menu.screen == Sc::LevelCard && s.menu.leave >= 1);
+    if (!play) return false;
+    if (!studio_) return false;  // (made in prepare)
+    // the temple painted (walls, floor, the jungle round it), else around the 3D one the jungle's dark
+    if (const Texture2D* room = studio_->room()) {
+        // (darker and moodier than painted: the jungle's shade)
+        DrawTexturePro(*room, {0, 0, float(room->width), float(room->height)}, {0, 0, float(W), float(H)}, {0, 0}, 0,
+                       bb_world_style(studio_->world()).room_tint);
+    } else {
+        DrawRectangleGradientV(0, 0, W, H, Color{20, 28, 18, 255}, Color{6, 8, 5, 255});
+        DrawCircleGradient(Vector2{W * 0.55f, H * 0.5f}, W * 0.55f, Color{110, 70, 25, 90}, Color{20, 28, 18, 0});
+    }
+    BBState empty;  // (during the card the objects are not the level's yet: the room empty)
+    if (s.menu.screen == Sc::LevelCard) empty = s, empty.objects.clear();
+    const BBState& shown = s.menu.screen == Sc::LevelCard ? empty : s;
+    studio_->draw(shown, t, SCALE, studio_look, [this](const BBObject& o) { return bat_body(o); }, slab_lift);
+    if (studio_->room()) {
+        ambient(t);
+        // the corners sink into the dark
+        const Color sh = bb_world_style(studio_->world()).shadow;
+        const Color clear{sh.r, sh.g, sh.b, 0}, dark{sh.r, sh.g, sh.b, 200};
+        DrawRectangleGradientV(0, 0, W, 260, Color{sh.r, sh.g, sh.b, 150}, clear);
+        DrawRectangleGradientV(0, H - 220, W, 220, clear, dark);
+        DrawRectangleGradientH(0, 0, 320, H, dark, clear);
+        DrawRectangleGradientH(W - 320, 0, 320, H, clear, dark);
+    }
+    // over it in 2D (lowered with the scene): the torches' glow, the creatures, the missile, the effects
+    const Camera2D lower{{0, BBStudio::DROP}, {0, 0}, 0, 1};
+    BeginMode2D(lower);
+    BeginBlendMode(BLEND_ADDITIVE);
+    if (studio_->room())  // the ball's band lights the floor under it
+        for (const BBObject& o : shown.objects)
+            if (o.slot == 0) {
+                const Vector3 c = BBStudio::ball_at(o);
+                const float hgt = std::max(0.0f, c.y - BALL_RADIUS), k = std::clamp(1 - hgt / 40, 0.2f, 1.0f);
+                DrawCircleGradient(Vector2{(160 + c.x - c.z) * SCALE, (118 - c.x / 2) * SCALE}, 90,
+                                   Color{60, 190, 255, uint8_t(70 * k)}, Color{60, 190, 255, 0});
+            }
+    for (int i = 0; i < BBStudio::TORCHES; i++) {
+        const Vector3 f = BBStudio::torch(i);
+        const Vector2 p{(160 + f.x - f.z) * SCALE, (118 - f.x / 2 - f.y) * SCALE};
+        const float g = BBStudio::torch_glow(i, t), k = studio_->room() ? 0.75f : 1.0f;
+        const BBWorldStyle& ws = bb_world_style(studio_->world());
+        Color o = ws.glow_out, n = ws.glow_in;
+        DrawCircleGradient(p, 150 * g, Color{o.r, o.g, o.b, uint8_t(std::min(255.f, 70 * g * k))}, Color{o.r, o.g, o.b, 0});
+        DrawCircleGradient(p, 40 * g, Color{n.r, n.g, n.b, uint8_t(std::min(255.f, 90 * g * k))}, Color{n.r, n.g, n.b, 0});
+    }
+    EndBlendMode();
+    for (const BBObject& o : shown.objects) {
+        if (o.slot == 2 || (o.sprite >= 0x16 && o.sprite <= 0x18)) missile(o, t, false);
+        else if (o.slot >= 3 && o.sprite >= 0x11 && o.sprite <= 0x15) sprite(o, Color{140, 255, 180, 255}, t, false);
+    }
+    effects(t, false);
+    EndMode2D();
+    if (s.menu.screen == Sc::LevelCard) level_card(s, t, false);
+    temple_panel(s, t);
+    return true;
+}
+
+BBWorld BBRenderer::world_of(const BBState& s) const {
+    // five levels each, in turn (BB_WORLD=0..9 holds one, to look at it)
+    static const char* force = std::getenv("BB_WORLD");
+    if (force) return BBWorld(std::clamp(std::atoi(force), 0, BB_WORLDS - 1));
+    return BBWorld(std::clamp(s.level / BB_WORLD_LEVELS, 0, BB_WORLDS - 1));
+}
+
+void BBRenderer::ambient(double t) {
+    // each world's own life over the picture (stateless: each particle is where its time puts it)
+    auto h = [](int i, int k) { return float((i * (73 + 18 * k) + k * 31) % 101) / 101.f; };
+    switch (studio_->world()) {
+    case BBWorld::Jungle: sunlight(t); break;
+    case BBWorld::Atlantis: {  // light from the surface, wavering; bubbles rising
+        const Vector2 sun{900, -260};
+        BeginBlendMode(BLEND_ADDITIVE);
+        rlBegin(RL_TRIANGLES);
+        for (int i = 0; i < 7; i++) {
+            const float ang = 1.32f + 0.12f * float(i) + 0.03f * float(std::sin(t * 0.4 + i * 1.7));
+            const float wid = 0.03f + 0.015f * float((i * 5) % 3), len = 1300;
+            const float a = 22 + 14 * float(std::sin(t * (0.5 + 0.09 * i) + i * 2.0));
+            const Vector2 p1{sun.x + std::cos(ang - wid) * len, sun.y + std::sin(ang - wid) * len};
+            const Vector2 p2{sun.x + std::cos(ang + wid) * len, sun.y + std::sin(ang + wid) * len};
+            rlColor4ub(150, 240, 255, uint8_t(std::max(0.0f, a)));
+            rlVertex2f(sun.x, sun.y);
+            rlColor4ub(150, 240, 255, 0);
+            rlVertex2f(p2.x, p2.y);
+            rlVertex2f(p1.x, p1.y);
+        }
+        rlEnd();
+        EndBlendMode();
+        for (int i = 0; i < 46; i++) {
+            const float sp = 0.05f + 0.08f * h(i, 1), v = 1 - std::fmod(h(i, 2) + float(t) * sp, 1.0f);
+            const float r = 2.5f + 6 * h(i, 3);
+            const Vector2 p{40 + h(i, 0) * (W - 80) + 14 * float(std::sin(t * 2.0 + i)), 120 + v * (H - 120)};
+            DrawCircleLinesV(p, r, Color{200, 245, 255, uint8_t(90 + 60 * h(i, 4))});
+            DrawCircleV({p.x - r * 0.35f, p.y - r * 0.35f}, r * 0.25f, Color{255, 255, 255, 120});
+        }
+        break;
+    }
+    case BBWorld::Ice: {  // snow falling, swaying
+        for (int i = 0; i < 140; i++) {
+            const float sp = 0.06f + 0.1f * h(i, 1), v = std::fmod(h(i, 2) + float(t) * sp, 1.0f), r = 1.5f + 3.5f * h(i, 3);
+            const Vector2 p{h(i, 0) * W + 40 * float(std::sin(t * (0.6 + h(i, 4)) + i)), v * (H + 40) - 20};
+            DrawCircleGradient(p, r * 1.8f, Color{255, 255, 255, uint8_t(120 + 100 * h(i, 5))}, Color{220, 235, 255, 0});
+        }
+        break;
+    }
+    case BBWorld::Tomb: {  // sand streaming through the dark, catching the light
+        for (int i = 0; i < 110; i++) {
+            const float sp = 0.05f + 0.07f * h(i, 1), u = 1 - std::fmod(h(i, 2) + float(t) * sp, 1.0f);
+            const Vector2 p{u * (W + 100) - 50, 140 + h(i, 0) * (H - 200) + 20 * float(std::sin(t * 1.3 + i))};
+            const float a = 70 + 90 * h(i, 3);
+            DrawLineEx(p, {p.x + 6 + 10 * h(i, 4), p.y - 1}, 1.6f, Color{235, 200, 140, uint8_t(a)});
+        }
+        break;
+    }
+    case BBWorld::Garden: {  // cherry petals drifting down
+        for (int i = 0; i < 60; i++) {
+            const float sp = 0.04f + 0.05f * h(i, 1), v = std::fmod(h(i, 2) + float(t) * sp, 1.0f);
+            const Vector2 p{h(i, 0) * W + 120 * float(std::sin(t * (0.5 + h(i, 4)) + i)) - v * 200, v * (H + 40) - 20};
+            const float ang = float(t) * (1.5f + 2 * h(i, 5)) + i, l = 5 + 4 * h(i, 3), w2 = l * 0.5f;
+            const float ca = std::cos(ang), sa = std::sin(ang);
+            const Color pc{255, uint8_t(175 + 30 * h(i, 6)), uint8_t(200 + 30 * h(i, 6)), 220};
+            tri({p.x + ca * l, p.y + sa * l}, {p.x - sa * w2, p.y + ca * w2}, {p.x - ca * l, p.y - sa * l}, pc);
+            tri({p.x + ca * l, p.y + sa * l}, {p.x - ca * l, p.y - sa * l}, {p.x + sa * w2, p.y - ca * w2}, pc);
+        }
+        break;
+    }
+    case BBWorld::Castle: {  // fog crawling over the floor; a few wisps
+        for (int i = 0; i < 14; i++) {
+            const float sp = 0.012f + 0.01f * h(i, 1), u = std::fmod(h(i, 2) + float(t) * sp, 1.0f);
+            const Vector2 p{u * (W + 800) - 400, 640 + h(i, 0) * 420};
+            DrawCircleGradient(p, 220 + 160 * h(i, 3), Color{150, 170, 190, uint8_t(38 + 20 * h(i, 4))}, Color{150, 170, 190, 0});
+        }
+        BeginBlendMode(BLEND_ADDITIVE);
+        for (int i = 0; i < 10; i++) {
+            const float sp = 0.03f + 0.03f * h(i, 1), v = 1 - std::fmod(h(i, 2) + float(t) * sp, 1.0f);
+            const Vector2 p{200 + h(i, 0) * (W - 400) + 60 * float(std::sin(t * 0.8 + i)), 200 + v * (H - 300)};
+            DrawCircleGradient(p, 14, Color{140, 255, 180, uint8_t(120 * v)}, Color{140, 255, 180, 0});
+        }
+        EndBlendMode();
+        break;
+    }
+    case BBWorld::Steam: {  // steam blowing from vents at the edges, now and then
+        for (int i = 0; i < 6; i++) {
+            const Vector2 vent{i < 3 ? 60.0f + 50 * i : W - 60.0f - 50 * (i - 3), H - 140.0f - 160 * float(i % 3)};
+            const float cycle = std::fmod(float(t) * 0.25f + h(i, 1), 1.0f);
+            for (int k = 0; k < 6; k++) {
+                const float age = cycle - k * 0.04f;
+                if (age < 0 || age > 0.5f) continue;
+                const float a = 1 - age / 0.5f;
+                const Vector2 p{vent.x + (i < 3 ? 1 : -1) * age * 500, vent.y - age * 300};
+                DrawCircleGradient(p, 40 + age * 260, Color{235, 235, 230, uint8_t(70 * a)}, Color{235, 235, 230, 0});
+            }
+        }
+        break;
+    }
+    case BBWorld::Cyber: {  // rain, slanting; the neon now and then stuttering
+        for (int i = 0; i < 220; i++) {
+            const float sp = 0.9f + 0.6f * h(i, 1), v = std::fmod(h(i, 2) + float(t) * sp, 1.0f);
+            const Vector2 p{h(i, 0) * (W + 200) - v * 160, v * (H + 60) - 30};
+            DrawLineEx(p, {p.x - 8, p.y + 28}, 1.4f, Color{170, 190, 255, uint8_t(60 + 50 * h(i, 3))});
+        }
+        if (std::fmod(t, 7.3) < 0.12 && std::fmod(t * 40, 2.0) < 1.0)
+            DrawRectangle(0, 0, W, H, Color{20, 0, 30, 60});  // (a flicker of the signs)
+        break;
+    }
+    case BBWorld::Alien: {  // spores rising, glowing
+        BeginBlendMode(BLEND_ADDITIVE);
+        for (int i = 0; i < 70; i++) {
+            const float sp = 0.03f + 0.05f * h(i, 1), v = 1 - std::fmod(h(i, 2) + float(t) * sp, 1.0f), r = 2 + 3 * h(i, 3);
+            const Vector2 p{h(i, 0) * W + 60 * float(std::sin(t * (0.4 + h(i, 4)) + i * 1.3)), 120 + v * (H - 120)};
+            const Color sc = i % 3 ? Color{140, 255, 150, 255} : Color{230, 120, 255, 255};
+            const float a = (0.5f + 0.5f * float(std::sin(t * (1.5 + 2 * h(i, 5)) + i))) * v;
+            DrawCircleGradient(p, r * 3, Color{sc.r, sc.g, sc.b, uint8_t(200 * a)}, Color{sc.r, sc.g, sc.b, 0});
+        }
+        EndBlendMode();
+        break;
+    }
+    case BBWorld::Volcano: {  // embers rising, flickering; the heat below breathing
+        BeginBlendMode(BLEND_ADDITIVE);
+        const float heat = 0.5f + 0.5f * float(std::sin(t * 0.9));
+        DrawRectangleGradientV(0, H - 300, W, 300, Color{255, 80, 10, 0}, Color{255, 80, 10, uint8_t(40 + 40 * heat)});
+        for (int i = 0; i < 70; i++) {
+            const float sp = 0.07f + 0.12f * h(i, 1), v = 1 - std::fmod(h(i, 2) + float(t) * sp, 1.0f), r = 1.5f + 2.5f * h(i, 3);
+            const Vector2 p{h(i, 0) * W + 50 * float(std::sin(t * (0.8 + h(i, 4)) + i * 1.3)), 100 + v * (H - 100)};
+            const float a = (0.5f + 0.5f * float(std::sin(t * (3 + 4 * h(i, 5)) + i))) * v;
+            DrawCircleGradient(p, r * 2.5f, Color{255, 170, 60, uint8_t(220 * a)}, Color{255, 60, 0, 0});
+        }
+        EndBlendMode();
+        break;
+    }
+    }
+}
+
+void BBRenderer::sunlight(double t) {
+    // the painted temple's sun: shafts from the upper left, slowly breathing, and dust drifting in them
+    const Vector2 sun{620, -140};
+    BeginBlendMode(BLEND_ADDITIVE);
+    rlBegin(RL_TRIANGLES);
+    for (int i = 0; i < 6; i++) {
+        const float ang = 2.05f + 0.13f * float(i) + 0.02f * float(std::sin(t * 0.21 + i * 1.3));  // down-left
+        const float wid = 0.025f + 0.012f * float((i * 7) % 3), len = 980;
+        const float a = 26 + 16 * float(std::sin(t * (0.35 + 0.07 * i) + i * 2.0));
+        const Vector2 p1{sun.x + std::cos(ang - wid) * len, sun.y + std::sin(ang - wid) * len};
+        const Vector2 p2{sun.x + std::cos(ang + wid) * len, sun.y + std::sin(ang + wid) * len};
+        rlColor4ub(255, 214, 140, uint8_t(std::max(0.0f, a)));
+        rlVertex2f(sun.x, sun.y);
+        rlColor4ub(255, 214, 140, 0);
+        rlVertex2f(p2.x, p2.y);
+        rlVertex2f(p1.x, p1.y);
+    }
+    rlEnd();
+    for (int i = 0; i < 60; i++) {  // the motes: each its own slow drift and twinkle
+        const float h1 = float((i * 73) % 101) / 101.f, h2 = float((i * 37) % 89) / 89.f, h3 = float((i * 53) % 97) / 97.f;
+        const float u = std::fmod(h1 + float(t) * (0.004f + 0.006f * h3), 1.0f), v = std::fmod(h2 + float(t) * 0.01f * h1, 1.0f);
+        const Vector2 p{80 + u * 560 + 30 * float(std::sin(t * 0.5 + i)), 60 + v * 420 + u * 160};
+        const float a = 90 * (0.5f + 0.5f * float(std::sin(t * (1.0 + h3 * 2) + i * 1.7)));
+        DrawCircleV(p, 1.4f + 1.6f * h3, Color{255, 236, 190, uint8_t(a)});
+    }
+    EndBlendMode();
+}
+
+void BBRenderer::temple_panel(const BBState& s, double) {
+    if (hud_board_.id && hud_star_.id && hud_heart_.id && hud_missile_.id) {
+        // carved wooden boards over the jungle: the score with its star, the level, the lives and missiles
+        const Color white{250, 246, 236, 255}, ink{28, 16, 6, 255};
+        const float y = 8, hgt = 88;
+        auto board = [&](float x, float w) {
+            // the pointed ends keep their shape (scaled to the height), the middle stretches
+            const float tw = float(hud_board_.width), th = float(hud_board_.height), e = th * 0.55f, k = hgt / th;
+            DrawTexturePro(hud_board_, {0, 0, e, th}, {x, y, e * k, hgt}, {0, 0}, 0, WHITE);
+            DrawTexturePro(hud_board_, {e, 0, tw - 2 * e, th}, {x + e * k, y, w - 2 * e * k, hgt}, {0, 0}, 0, WHITE);
+            DrawTexturePro(hud_board_, {tw - e, 0, e, th}, {x + w - e * k, y, e * k, hgt}, {0, 0}, 0, WHITE);
+        };
+        auto icon = [&](const Texture2D& tx, Vector2 c, float size) {
+            const float k = size / float(std::max(tx.width, tx.height));
+            DrawTexturePro(tx, {0, 0, float(tx.width), float(tx.height)},
+                           {c.x - tx.width * k / 2, c.y - tx.height * k / 2, tx.width * k, tx.height * k}, {0, 0}, 0, WHITE);
+        };
+        // bold lettering with a dark rim (the font has one weight: drawn a few times over)
+        auto say = [&](const char* str, Vector2 at, float size, bool centre = false) {
+            if (centre) {
+                const Vector2 m = MeasureTextEx(lettering(false), str, size, size * 0.06f);
+                at = {at.x - m.x / 2, at.y - m.y / 2};
+            }
+            const float r = size * 0.07f;
+            for (float dx = -r; dx <= r + 1; dx += r / 2)
+                for (float dy = -r; dy <= r + 2; dy += r / 2) text_left(str, {at.x + dx, at.y + dy}, size, ink);
+            for (float dx = 0; dx <= size * 0.035f; dx += 0.75f) text_left(str, {at.x + dx, at.y}, size, white);
+        };
+        char buf[64];
+        board(20, 420);
+        icon(hud_star_, {98, y + hgt / 2}, 64);
+        say("SCORE", {146, y + 10}, 28);
+        std::snprintf(buf, sizeof buf, "%07d", s.score);
+        say(buf, {146, y + 38}, 42);
+        board(W / 2.0f - 170, 340);
+        std::snprintf(buf, sizeof buf, "LEVEL %d", s.level + 1);
+        say(buf, {W / 2.0f, y + hgt / 2}, 44, true);
+        const float rx = W - 20 - 560, mid = rx + 330;
+        board(rx, 560);
+        DrawRectangle(int(mid), int(y + 14), 4, int(hgt - 28), Color{40, 24, 12, 200});  // the two halves
+        DrawRectangle(int(mid) + 4, int(y + 14), 2, int(hgt - 28), Color{150, 110, 70, 120});
+        say("LIVES", {rx + 165, y + 24}, 28, true);
+        const int shown = std::min(s.lives, 4);
+        for (int i = 0; i < shown; i++) icon(hud_heart_, {rx + 165 + (i - (shown - 1) / 2.0f) * 50, y + 60}, 44);
+        if (s.lives > shown || s.unlimited_lives) {
+            std::snprintf(buf, sizeof buf, s.unlimited_lives ? "+" : "+%d", s.lives - shown);
+            say(buf, {rx + 175 + (shown + 1) / 2.0f * 50, y + 46}, 28);
+        }
+        say("MISSILES", {mid + 95, y + 24}, 24, true);
+        icon(hud_missile_, {mid + 52, y + 60}, 44);
+        std::snprintf(buf, sizeof buf, s.unlimited_missiles ? "--" : "%02d", s.missiles);
+        say(buf, {mid + 78, y + 39}, 42);
+        return;
+    }
+    // a carved stone lintel over the temple: the score, the level, the lives and missiles, in gold
+    constexpr int PH = 96;
+    const Color gold{238, 190, 92, 255}, dim{176, 150, 110, 255}, cut{40, 32, 24, 255};
+    DrawRectangleGradientV(0, 0, W, PH, Color{92, 78, 58, 255}, Color{58, 48, 36, 255});
+    for (int x = 0; x < W; x += 160) DrawRectangle(x, 0, 2, PH - 6, Color{48, 40, 30, 120});  // its stones
+    DrawRectangle(0, PH - 6, W, 3, cut);
+    DrawRectangle(0, PH - 3, W, 3, Color{200, 150, 60, 255});
+    // the step frets at its ends
+    for (int side = 0; side < 2; side++)
+        for (int i = 0; i < 4; i++) {
+            const int x = side ? W - 30 - (i + 1) * 18 : 30 + i * 18, hgt = 14 + i * 12;
+            DrawRectangle(x, PH - 14 - hgt, 16, hgt, Color{70, 58, 42, 255});
+            DrawRectangle(x, PH - 14 - hgt, 16, 3, Color{200, 150, 60, 200});
+        }
+    auto carved = [&](const char* str, Vector2 at, float size, Color c, bool centre) {
+        if (centre) text(str, {at.x + 2, at.y + 3}, size, cut), text(str, at, size, c);
+        else text_left(str, {at.x + 2, at.y + 3}, size, cut), text_left(str, at, size, c);
+    };
+    char buf[64];
+    carved("SCORE", {140, 14}, 26, dim, false);
+    std::snprintf(buf, sizeof buf, "%07d", s.score);
+    carved(buf, {140, 38}, 50, gold, false);
+    std::snprintf(buf, sizeof buf, "LEVEL %d", s.level + 1);
+    carved(buf, {W / 2.0f, PH / 2.0f - 2}, 56, gold, true);
+    carved("LIVES", {1180, 14}, 26, dim, false);
+    for (int i = 0; i < std::min(s.lives, 9); i++) {  // golden balls
+        const Vector2 c{1196.0f + i * 44, 62};
+        DrawCircleV({c.x + 2, c.y + 3}, 16, cut);
+        DrawCircleGradient(c, 16, Color{255, 226, 140, 255}, Color{170, 112, 34, 255});
+        DrawCircleV({c.x - 5, c.y - 6}, 4, Color{255, 250, 220, 220});
+    }
+    if (s.unlimited_lives) carved("UNLIMITED", {1180, 78}, 18, dim, false);
+    carved("MISSILES", {1560, 14}, 26, dim, false);
+    std::snprintf(buf, sizeof buf, "%02d", s.missiles);
+    carved(buf, {1560, 38}, 50, gold, false);
+    if (s.unlimited_missiles) carved("UNLIMITED", {1640, 54}, 18, dim, false);
+}
+
 void BBRenderer::draw(const BBState& s, double t) {
     bat_edge_ = false;
+    if (studio()) {  // the Adventure look: its play, else its menus (no neon bloom)
+        if (!studio_draw(s, t)) scene(s, t, false);
+        // the picture opaque again (what was blended in thinned its alpha: holes where it is shown)
+        rlDrawRenderBatchActive();
+        rlSetBlendFactorsSeparate(RL_ZERO, RL_ONE, RL_ONE, RL_ZERO, RL_FUNC_ADD, RL_FUNC_ADD);
+        BeginBlendMode(BLEND_CUSTOM_SEPARATE);
+        DrawRectangle(0, 0, W, H, WHITE);
+        EndBlendMode();
+        return;
+    }
     scene(s, t, false);
     if (!classic()) {
         BeginBlendMode(BLEND_ADDITIVE);
@@ -1728,13 +2250,13 @@ constexpr Color MENU_GOLD{255, 214, 120, 255}, MENU_LILAC{205, 170, 255, 255}, M
 }  // namespace
 
 void BBRenderer::text(const char* s, Vector2 centre, float size, Color c, bool big) const {
-    const Font& f = big ? font_big_ : font_ui_;
+    const Font& f = lettering(big);
     Vector2 m = MeasureTextEx(f, s, size, size * 0.06f);
     DrawTextEx(f, s, {centre.x - m.x / 2, centre.y - m.y / 2}, size, size * 0.06f, c);
 }
 
 void BBRenderer::text_left(const char* s, Vector2 at, float size, Color c, bool big) const {
-    DrawTextEx(big ? font_big_ : font_ui_, s, at, size, size * 0.06f, c);
+    DrawTextEx(lettering(big), s, at, size, size * 0.06f, c);
 }
 
 void BBRenderer::thumbnail(int sprite, Vector2 centre, float scale, double t, bool glow) {
@@ -1747,6 +2269,8 @@ void BBRenderer::thumbnail(int sprite, Vector2 centre, float scale, double t, bo
     if (sprite >= 0x11 && sprite <= 0x18) {  // aliens (and the like): their sprite, in neon
         sprite_at(sprite, {centre.x - SPRITE_W * scale / 2, centre.y - SPRITE_H * scale / 2 + bob, SPRITE_W * scale, SPRITE_H * scale},
                   Color{140, 255, 180, 255}, t, glow);
+    } else if (studio() && studio_ && !glow) {  // the Adventure look: the brick in 3D, its stone
+        studio_->icon(sprite, {centre.x, centre.y + bob}, scale * 1.15f, t, studio_look, slab_lift);
     } else {
         BBObject o{0, 0, sprite, 0, 0, 12, 3};
         brick(o, t, glow);
@@ -1759,56 +2283,111 @@ void BBRenderer::level_card(const BBState& s, double t, bool glow) {
     // (the card stays over the room: the remake brings the room in during it)
     // "SCREEN n" over the room as it comes in
     if (!glow) DrawRectangle(0, 300, W, 260, Fade(BLACK, 0.45f));
+    if (studio() && studio_ && studio_->room() && !glow) {  // the Adventure look: the world it is in, above
+        const char* name = bb_world_style(studio_->world()).name;
+        DrawRectangleGradientV(0, 230, W, 70, Fade(BLACK, 0), Fade(BLACK, 0.45f));
+        text(name, {W / 2.0f + 2, 272}, 44, Color{30, 18, 6, 220});
+        text(name, {W / 2.0f, 269}, 44, Color{238, 196, 110, 255});
+    }
     char buf[32];
     std::snprintf(buf, sizeof buf, "SCREEN %d", s.level + 1);
     float pulse = 0.85f + 0.15f * float(std::sin(t * 4));
+    // (the Adventure look: gold and cream; else lilac)
+    const bool adventure = studio() && studio_ && studio_->room();
+    const Color head = adventure ? Color{250, 226, 170, 255} : Color{230, 170, 255, 255};
+    const Color sub = adventure ? Color{226, 196, 140, 255} : MENU_LILAC;
     if (!s.menu.level_name.empty()) {  // Ballbreaker II: the level's name, its number, its designer
         float size = 110;
-        while (size > 50 && MeasureTextEx(font_big_, s.menu.level_name.c_str(), size, size * 0.06f).x > W - 160) size -= 6;
-        text(s.menu.level_name.c_str(), {W / 2.0f, 395}, size, scale(Color{230, 170, 255, 255}, pulse), true);
-        text(buf, {W / 2.0f, 478}, 40, Fade(MENU_LILAC, 0.85f));
-        if (!s.menu.designer.empty()) text(("DESIGNED BY " + s.menu.designer).c_str(), {W / 2.0f, 528}, 32, Fade(MENU_LILAC, 0.7f));
+        while (size > 50 && MeasureTextEx(lettering(true), s.menu.level_name.c_str(), size, size * 0.06f).x > W - 160) size -= 6;
+        text(s.menu.level_name.c_str(), {W / 2.0f, 395}, size, scale(head, pulse), true);
+        text(buf, {W / 2.0f, 478}, 40, Fade(sub, 0.85f));
+        if (!s.menu.designer.empty()) text(("DESIGNED BY " + s.menu.designer).c_str(), {W / 2.0f, 528}, 32, Fade(sub, 0.7f));
         return;
     }
-    text(buf, {W / 2.0f, 400}, 140, scale(Color{230, 170, 255, 255}, pulse), true);
-    text("GET READY", {W / 2.0f, 500}, 40, Fade(MENU_LILAC, 0.8f));
+    text(buf, {W / 2.0f, 400}, 140, scale(head, pulse), true);
+    text("GET READY", {W / 2.0f, 500}, 40, Fade(sub, 0.8f));
 }
 
 void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
     using Sc = BBMenu::Screen;
     const BBMenu& m = s.menu;
+    // the Adventure look: gold, cream and sand over the temple's gate; else neon lilac over the room
+    const bool adv = studio();
+    const Color GILT = adv ? Color{246, 200, 110, 255} : MENU_GOLD, LILAC = adv ? Color{222, 196, 150, 255} : MENU_LILAC;
+    const Color DIM = adv ? Color{196, 176, 140, 255} : MENU_DIM, BRIGHT = adv ? Color{252, 242, 222, 255} : WHITE;
     if (m.screen == Sc::Loading) {  // the title picture, the name over it
-        if (intro_.id && !glow)
-            DrawTexturePro(intro_, {0, 0, float(intro_.width), float(intro_.height)}, {0, 0, float(W), float(H)}, {0, 0}, 0,
-                           WHITE);
+        const Texture2D& pic = adv && menu_bg_.id ? menu_bg_ : intro_;  // (the Adventure look: the temple's gate)
+        if (pic.id && !glow)
+            DrawTexturePro(pic, {0, 0, float(pic.width), float(pic.height)}, {0, 0, float(W), float(H)}, {0, 0}, 0, WHITE);
+        if (adv && !glow) DrawRectangleGradientV(0, H - 380, W, 380, Color{6, 8, 3, 0}, Color{6, 8, 3, 210});
         float pulse = 0.85f + 0.15f * float(std::sin(t * 2));
-        if (!glow) text(m.title.c_str(), {W / 2.0f + 6, 836 + 6}, 170, Fade(Color{40, 10, 80, 255}, 0.85f), true);
-        text(m.title.c_str(), {W / 2.0f, 836}, 170, scale(Color{235, 165, 255, 255}, pulse), true);
-        if (!glow) text(m.publisher.c_str(), {W / 2.0f, 940}, 30, Fade(MENU_LILAC, 0.8f));
+        if (!glow) text(m.title.c_str(), {W / 2.0f + 6, 836 + 6}, 170, Fade(adv ? Color{40, 22, 6, 255} : Color{40, 10, 80, 255}, 0.85f), true);
+        text(m.title.c_str(), {W / 2.0f, 836}, 170, scale(adv ? Color{250, 205, 110, 255} : Color{235, 165, 255, 255}, pulse), true);
+        if (!glow) text(m.publisher.c_str(), {W / 2.0f, 940}, 30, Fade(LILAC, 0.8f));
         float blink = 0.5f + 0.5f * float(std::sin(t * 4));
         text("PRESS ANY KEY", {W / 2.0f, 1010}, 36, Fade(WHITE, glow ? 0.5f * blink : blink));
         return;
     }
-    // the room, dimmed: the menus float over it
-    room(0, t, glow);
-    DrawRectangle(0, 0, W, H, Fade(BLACK, glow ? 0.7f : 0.62f));
+    if (adv && menu_bg_.id) {  // the temple's gate, its torches flickering, the corners dark
+        DrawTexturePro(menu_bg_, {0, 0, float(menu_bg_.width), float(menu_bg_.height)}, {0, 0, float(W), float(H)}, {0, 0}, 0,
+                       m.screen == Sc::Main ? Color{190, 182, 170, 255} : Color{120, 114, 106, 255});
+        BeginBlendMode(BLEND_ADDITIVE);
+        for (int i = 0; i < 2; i++) {
+            const Vector2 p{i ? 1385.0f : 535.0f, 655};
+            const float g = BBStudio::torch_glow(i, t);
+            DrawCircleGradient(p, 170 * g, Color{255, 140, 50, uint8_t(60 * g)}, Color{255, 120, 40, 0});
+            DrawCircleGradient(p, 46 * g, Color{255, 220, 150, uint8_t(80 * g)}, Color{255, 180, 80, 0});
+        }
+        EndBlendMode();
+        DrawRectangleGradientV(0, 0, W, 330, Color{6, 8, 3, 190}, Color{6, 8, 3, 0});
+        DrawRectangleGradientV(0, H - 200, W, 200, Color{6, 8, 3, 0}, Color{6, 8, 3, 200});  // (the footer reads)
+        DrawRectangleGradientH(0, 0, 360, H, Color{6, 8, 3, 170}, Color{6, 8, 3, 0});
+        DrawRectangleGradientH(W - 360, 0, 360, H, Color{6, 8, 3, 0}, Color{6, 8, 3, 170});
+        if (m.screen != Sc::Main) DrawRectangleRounded({300, 270, W - 600.0f, 700}, 0.06f, 8, Fade(Color{12, 8, 4, 255}, 0.72f));
+    } else {  // the room, dimmed: the menus float over it
+        room(0, t, glow);
+        DrawRectangle(0, 0, W, H, Fade(BLACK, glow ? 0.7f : 0.62f));
+    }
     // the logo
     float pulse = 0.9f + 0.1f * float(std::sin(t * 2));
     // leaving for a game: the title rises away, the items part left and right (as the original's wipe)
     const float gone = m.leave < 1 ? m.leave * m.leave * (3 - 2 * m.leave) : 0, up = gone * 420, fade = 1 - gone;
-    text(m.title.c_str(), {W / 2.0f + 6, 136 + 6 - up}, 150, Fade(Color{60, 20, 120, 255}, glow ? 0 : 0.8f * fade), true);
-    text(m.title.c_str(), {W / 2.0f, 136 - up}, 150, Fade(scale(Color{225, 150, 255, 255}, pulse), fade), true);
-    if (!glow) text((m.publisher + "    ZX REMAKE").c_str(), {W / 2.0f, 232 - up}, 26, Fade(MENU_LILAC, 0.75f * fade));
+    if (adv) {  // carved gold: a dark rim, the gold, a lit upper edge
+        for (int dx = -4; dx <= 4; dx += 4)
+            for (int dy = -2; dy <= 8; dy += 5) text(m.title.c_str(), {W / 2.0f + dx, 136 + dy - up}, 150, Fade(Color{36, 20, 4, 255}, 0.9f * fade), true);
+        text(m.title.c_str(), {W / 2.0f, 136 - up}, 150, Fade(scale(Color{240, 190, 90, 255}, pulse), fade), true);
+        text(m.title.c_str(), {W / 2.0f, 133 - up}, 150, Fade(Color{255, 236, 170, 255}, 0.35f * fade), true);
+    } else {
+        text(m.title.c_str(), {W / 2.0f + 6, 136 + 6 - up}, 150, Fade(Color{60, 20, 120, 255}, glow ? 0 : 0.8f * fade), true);
+        text(m.title.c_str(), {W / 2.0f, 136 - up}, 150, Fade(scale(Color{225, 150, 255, 255}, pulse), fade), true);
+    }
+    if (!glow) text((m.publisher + "    ZX REMAKE").c_str(), {W / 2.0f, 232 - up}, 26, Fade(LILAC, 0.75f * fade));
 
     auto footer = [&](const char* s2) {
-        if (!glow) text(s2, {W / 2.0f, H - 60.0f}, 28, Fade(MENU_LILAC, 0.7f));
+        if (!glow) text(s2, {W / 2.0f, H - 60.0f}, 28, Fade(LILAC, 0.7f));
     };
-    auto title = [&](const char* s2) { text(s2, {W / 2.0f, 320}, 64, MENU_GOLD); };
+    auto title = [&](const char* s2) { text(s2, {W / 2.0f, 320}, 64, GILT); };
     switch (m.screen) {
     case Sc::Main: {
         for (int i = 0; i < 8; i++) {  // the game's six, and the remake's OPTIONS and EXIT
-            float y = 380 + i * 70.0f, cx = W / 2.0f + (i % 2 ? 1 : -1) * gone * W * 0.75f;
+            float y = (adv ? 330 : 380) + i * (adv ? 62.0f : 70.0f), cx = W / 2.0f + (i % 2 ? 1 : -1) * gone * W * 0.75f;
             bool on = i == m.cursor;
+            if (adv) {  // the chosen one on a wooden board; all with a dark rim to read over the picture
+                const char* item = i == 5 ? (m.sound_fx ? "IN-GAME MUSIC:  OFF" : "IN-GAME MUSIC:  ON") : MENU_ITEMS[i];
+                if (on && hud_board_.id) {
+                    const float bw = 600, bh = 72, tw = float(hud_board_.width), th = float(hud_board_.height), e = th * 0.55f, k = bh / th;
+                    const float x = cx - bw / 2, yy = y - bh / 2;
+                    const Color tint = Fade(WHITE, fade);
+                    DrawTexturePro(hud_board_, {0, 0, e, th}, {x, yy, e * k, bh}, {0, 0}, 0, tint);
+                    DrawTexturePro(hud_board_, {e, 0, tw - 2 * e, th}, {x + e * k, yy, bw - 2 * e * k, bh}, {0, 0}, 0, tint);
+                    DrawTexturePro(hud_board_, {tw - e, 0, e, th}, {x + bw - e * k, yy, e * k, bh}, {0, 0}, 0, tint);
+                }
+                const float size = on ? 46 : 40;
+                for (int dx = -2; dx <= 2; dx += 2)
+                    for (int dy = -1; dy <= 3; dy += 2) text(item, {cx + dx, y + dy}, size, Fade(Color{20, 12, 4, 255}, 0.85f * fade));
+                text(item, {cx, y}, size, Fade(on ? Color{255, 222, 140, 255} : BRIGHT, fade));
+                continue;
+            }
             if (on) {
                 float wpx = 640, hpx = 72;
                 Rectangle bar{cx - wpx / 2, y - hpx / 2, wpx, hpx};
@@ -1818,11 +2397,11 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
             // the original's last item names what it would switch to (SOUND FX / MUSIC): here, what it
             // does now (the remake's own effects sound either way: it is the tune in play, on or off)
             const char* item = i == 5 ? (m.sound_fx ? "IN-GAME MUSIC:  OFF" : "IN-GAME MUSIC:  ON") : MENU_ITEMS[i];
-            text(item, {cx, y}, on ? 50 : 42, Fade(on ? WHITE : (glow ? Fade(MENU_DIM, 0.4f) : MENU_DIM), fade));
+            text(item, {cx, y}, on ? 50 : 42, Fade(on ? WHITE : (glow ? Fade(DIM, 0.4f) : DIM), fade));
         }
         if (!glow && gone == 0)
             text("Programming Richard Taylor    Graphics Jon Law    Design Clement Chambers    Sound Jay Derrett",
-                 {W / 2.0f, H - 110.0f}, 24, Fade(MENU_LILAC, 0.6f));
+                 {W / 2.0f, H - 110.0f}, 24, Fade(LILAC, adv ? 0.85f : 0.6f));
         if (gone == 0) footer("UP / DOWN  choose      ENTER  select      ESC  options");
         break;
     }
@@ -1834,8 +2413,8 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
                                  {"Pause", "ESC  /  gamepad START"}};
         for (int i = 0; i < 4; i++) {
             float y = 440 + i * 90.0f;
-            if (!glow) text_left(rows[i][0], {360, y - 22}, 40, MENU_LILAC);
-            text_left(rows[i][1], {900, y - 22}, 40, WHITE);
+            if (!glow) text_left(rows[i][0], {360, y - 22}, 40, LILAC);
+            text_left(rows[i][1], {900, y - 22}, 40, BRIGHT);
         }
         footer("ESC / ENTER  back");
         break;
@@ -1852,8 +2431,8 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
         const int n = int(sizeof rows / sizeof rows[0]);
         for (int i = 0; i < n; i++) {
             float y = 400 + i * 72.0f;
-            text_left(rows[i][0], {460, y - 22}, 40, MENU_GOLD);
-            if (!glow) text_left(rows[i][1], {800, y - 22}, 40, WHITE);
+            text_left(rows[i][0], {460, y - 22}, 40, GILT);
+            if (!glow) text_left(rows[i][1], {800, y - 22}, 40, BRIGHT);
         }
         footer("any key  back");
         break;
@@ -1863,8 +2442,11 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
         for (size_t i = 0; i < m.scores.size() && i < 9; i++) {
             float y = 400 + float(i) * 62;
             bool on = int(i) == m.entry_row;
-            Color c = on ? WHITE : (i == 0 ? MENU_GOLD : MENU_LILAC);
-            if (on) {
+            Color c = on ? BRIGHT : (i == 0 ? GILT : LILAC);
+            if (on && adv) {
+                DrawRectangleRounded({440, y - 28, 1040, 56}, 0.4f, 8, Fade(Color{120, 80, 30, 255}, 0.55f));
+                DrawRectangleRoundedLinesEx({440, y - 28, 1040, 56}, 0.4f, 8, 2.5f, scale(GILT, pulse));
+            } else if (on) {
                 Rectangle bar{440, y - 28, 1040, 56};
                 if (!glow) DrawRectangleRounded(bar, 0.4f, 8, Fade(Color{120, 60, 220, 255}, 0.35f));
                 DrawRectangleRoundedLinesEx(bar, 0.4f, 8, glow ? 5 : 2.5f, scale(Color{230, 170, 255, 255}, pulse));
@@ -1876,7 +2458,7 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
             if (on && std::fmod(t, 0.8) < 0.4) name += "_";
             text_left(name.c_str(), {600, y - 22}, 40, c);
             std::snprintf(buf, sizeof buf, "%07d", m.scores[i].score);
-            Vector2 w = MeasureTextEx(font_ui_, buf, 40, 40 * 0.06f);
+            Vector2 w = MeasureTextEx(lettering(false), buf, 40, 40 * 0.06f);
             text_left(buf, {1440 - w.x, y - 22}, 40, c);
         }
         footer(m.entry_row >= 0 ? "type your name, ENTER" : "any key  back");
@@ -1897,21 +2479,21 @@ void BBRenderer::menu_scene(const BBState& s, double t, bool glow) {
             if (it.points > 0) {
                 char buf[24];
                 std::snprintf(buf, sizeof buf, "%d POINTS", it.points);
-                text_left(buf, {cx + 80, ty}, 30, MENU_GOLD);
+                text_left(buf, {cx + 80, ty}, 30, GILT);
                 ty += 40;
             }
             std::string txt = it.text;
             for (size_t a = 0; a < txt.size();) {  // lines split at '*'
                 size_t b = txt.find('*', a);
                 std::string ln = txt.substr(a, b == std::string::npos ? std::string::npos : b - a);
-                text_left(ln.c_str(), {cx + 80, ty}, 28, WHITE);
+                text_left(ln.c_str(), {cx + 80, ty}, 28, BRIGHT);
                 ty += 34;
                 if (b == std::string::npos) break;
                 a = b + 1;
             }
         }
         for (int p = 0; p < pages; p++)  // page dots
-            DrawCircle(int(W / 2.0f + (p - (pages - 1) / 2.0f) * 30), H - 110, p == page ? 8 : 5, p == page ? WHITE : MENU_DIM);
+            DrawCircle(int(W / 2.0f + (p - (pages - 1) / 2.0f) * 30), H - 110, p == page ? 8 : 5, p == page ? BRIGHT : DIM);
         footer(m.instructions_auto
                    ? (m.instructions_page >= 0 ? "LEFT / RIGHT  pages  /  auto paging off  /  ESC  back"
                                                : "LEFT / RIGHT  pages  /  automatic pages  /  ESC  back")

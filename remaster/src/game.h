@@ -72,6 +72,13 @@ public:
     virtual void draw(const Spectrum&, bool original, double t) = 0;
     // The controls, shown on the pause screen (lines).
     virtual std::string help() const;
+    // How the pause screen and the toasts look (the module's look; original: the R view is shown)
+    struct PauseStyle {
+        Color panel{17, 22, 31, 255}, accent{255, 214, 96, 255}, text{245, 245, 245, 255}, muted{155, 166, 183, 255};
+        Color key{36, 44, 58, 255}, rule{49, 59, 74, 255}, hover{48, 58, 78, 255};
+        const Font* font = nullptr;  // null: raylib's own
+    };
+    virtual PauseStyle pause_style(bool /*original*/) const { return {}; }
     // A remake key (a letter, while letters_free(), or on the pause screen) not taken by the
     // runner: a game option. Returns what to show (a toast), empty if not one of the game's.
     virtual std::string on_key(Spectrum&, int /*raylib key*/) { return ""; }

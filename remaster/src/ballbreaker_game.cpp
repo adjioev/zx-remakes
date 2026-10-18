@@ -39,11 +39,13 @@ const BBGame BALL_BREAKER = {
     {{1, 4, 8, 10, 26, 27, 29, 34, 37, 45, 47, 49}, {2, 7, 13, 16, 25, 30, 33, 35, 39, 40, 42, 46, 50},
      {3, 17, 23, 32, 36, 44}, {6, 11, 18, 21, 38, 41}, {5, 12, 22, 31, 43}, {9, 14, 19, 28, 48}, {15, 20, 24}},
     0xAE11,
-    BBTheme::Neon,
+    BBTheme::Studio,  // the Adventure look (T: Neon, Classic HD)
     0x89D4,
     0x8B92,
     0x90B2, 0x90D8, 0x80A2, 0x807A, 0x808E,
     0x808D, 0x8F64,
+    0xB893, 0xA004,
+    0x8445, 0x81AB, 0x9295, 0x927A, 0x92CA,
 };
 
 // Ballbreaker II (notes/ballbreaker2.md): its main menu moves an arrow; the item under it is at
@@ -64,11 +66,13 @@ const BBGame BALL_BREAKER_2 = {
     {{2, 5, 6, 9, 11, 15, 17, 19, 21, 23, 25, 26, 27, 28, 29, 30}, {1, 16, 22}, {4, 14}, {3, 8, 10, 13, 20}, {}, {},
      {7, 12, 18, 24}},
     0,                   // instructions demonstration: not mapped
-    BBTheme::ClassicHD,  // the sequel looks its own: solid, brighter (T: Neon)
+    BBTheme::Studio,     // the Adventure look (T: Neon, Classic HD)
     0x89F6,
     0x8BB7,
     0x90D4, 0x90FA, 0x80A1, 0x8079, 0x808D,
     0x808C, 0x8F86,
+    0xBFB9, 0xA139,
+    0x8467, 0x81CD, 0x92B7, 0x929C, 0x92EC,
 };
 
 namespace {
@@ -492,6 +496,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
     // Original-speed launch shortcut; O always selects the verified smoothing.
     if (preview_enabled_ && preview) original_speed_ = true;
     if (const char* h = std::getenv("BB_HYBRID")) hybrid_ = std::string(h) != "0";
+    if (const char* e = std::getenv("BB_ENGINE")) engine_enabled_ = std::string(e) != "0";
     // the HD art is the first game's, shared (assets/<g_.art>)
     const std::string assets = game_assets.substr(0, game_assets.find_last_of('/') + 1) + g_.art;
     fonts_dir_ = assets + "/../fonts";
@@ -596,6 +601,22 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
             }
             sp->poke(BAT_CENTRE, uint8_t(c));
         });
+    // the parked CPU (see the main loop): sent on when the remake's level is over (one pending jump
+    // at a time: it is asked for here, where nothing else jumps)
+    if (g_.park)
+        s.on_exec(g_.park, [this, sp](const zxc_regs_t& r) {
+            if (engine_then_) {
+                sp->jump_at(g_.park, engine_then_, 0x0000);
+                engine_then_ = 0, engine_calls_.clear(), parked_ = false;
+                return;
+            }
+            if (engine_calls_.empty()) return;
+            // one routine a visit, returning here: its return address (this very place) is the only
+            // thing put under the stack - an interrupt before the jump pushes that same address there
+            sp->poke16(uint16_t(r.sp - 2), g_.park);
+            sp->jump_at(g_.park, engine_calls_.front(), uint16_t(r.sp - 2));
+            engine_calls_.erase(engine_calls_.begin());
+        });
     if (g_.redraw_list)
         s.on_exec(g_.redraw_list, [this, sp](const zxc_regs_t&) {
             const int centre = sp->peek(BAT_CENTRE);
@@ -669,7 +690,14 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
                 blow_up(obj);
             }
     });
-    s.on_exec(g_.main_loop, [this, sp](const zxc_regs_t&) {
+    s.on_exec(g_.main_loop, [this, sp](const zxc_regs_t& r) {
+        if ((engine_play() || engine_then_) && pending_level_ < 0) {  // the remake plays this level: the game waits (its interrupt
+            paced_ = false;                          // goes on: the tune) until it is over
+            sp->set_turbo(1);
+            parked_ = true;
+            sp->jump_at(g_.main_loop, g_.park, r.sp);
+            return;
+        }
         if (pending_level_ >= 0) {  // the jump (jump_to): the level number, then the level start
             sp->poke(LEVEL, uint8_t(pending_level_));
             pending_level_ = -1;
@@ -708,7 +736,11 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
         advance_ = false;
         sp->poke(PLAY_REASON, 1);
     });
-    if (g_.level_built) s.on_exec(g_.level_built, [this](const zxc_regs_t&) { building_ = false; });
+    if (g_.level_built) s.on_exec(g_.level_built, [this, sp](const zxc_regs_t&) {
+        building_ = false;
+        engine_level_ = false, engine_.stop(), parked_ = false;
+        if (engine_mode()) engine_start(*sp);
+    });
     s.on_exec(g_.level_start, [this, sp](const zxc_regs_t&) {
         paddle_hit_ = {};
         building_ = g_.level_built != 0;
@@ -730,6 +762,7 @@ void BallBreakerView::start(Spectrum& s, const std::string& game_assets) {
 }
 
 void BallBreakerView::after_frame(Spectrum& s) {
+    if (engine_play() && parked_) seen_play_ = frame_ + 1;  // the game parked: the remake's play is the play
     auto recent = [&](uint64_t seen) { return seen && frame_ + 1 - seen < RECENT; };
     using Sc = BBMenu::Screen;
     Mode before = mode_;
@@ -841,7 +874,9 @@ void BallBreakerView::after_frame(Spectrum& s) {
         float screen_x = 160.0f + s.peek(BALL_X) - s.peek(0x8065);
         sfx_.push_back({Sfx::BatHit, std::clamp(screen_x / 128.0f - 1, -1.0f, 1.0f) * 0.7f, 0.9f});
     }
-    if (mode_ == Mode::Play) smooth_sample(s), check_cleared();
+    if (engine_play() && parked_ && mode_ == Mode::Play) engine_frame(s);  // (from the game's play on)
+    if (mode_ == Mode::Play) smooth_sample(s);
+    if (mode_ == Mode::Play && !engine_level_) check_cleared();
     else { tracks_.clear(); preview_.clear(); paddle_motion_.clear(); contact_motion_.clear(); }
     if (std::getenv("BB_TURBO_LOG"))
         std::fprintf(stderr, "frame %llu paced %d passes %llu ball %u,%u score %u lives %u delay %.0f ms\n",
@@ -971,6 +1006,13 @@ void BallBreakerView::input(Spectrum& s, const Controls& c) {
         if (c.dirs & (ZXC_JOY_LEFT | ZXC_JOY_DOWN)) joy |= ZXC_JOY_LEFT;
         if (c.dirs & (ZXC_JOY_RIGHT | ZXC_JOY_UP)) joy |= ZXC_JOY_RIGHT;
         if (c.fire || c.click) joy |= ZXC_JOY_FIRE;
+        if (engine_play()) {  // the remake plays: the game sees nothing
+            bat_dir_ = bool(joy & ZXC_JOY_RIGHT) - bool(joy & ZXC_JOY_LEFT);
+            bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : -1;
+            engine_fire_ = joy & ZXC_JOY_FIRE;
+            joy = 0, aim_ = -1;
+            break;
+        }
         if (hybrid()) {  // the remake moves the bat (hybrid_bat): the game sees fire only
             bat_dir_ = bool(joy & ZXC_JOY_RIGHT) - bool(joy & ZXC_JOY_LEFT);
             bat_target_ = c.mouse ? std::max(0.0f, rail_x(s, c.pointer)) : -1;
@@ -1014,6 +1056,17 @@ float BallBreakerView::rail_x(const Spectrum& s, Vector2 p) const {
     return (2 * a - b) / 2.5f;
 }
 
+GameView::PauseStyle BallBreakerView::pause_style(bool original) const {
+    // the Adventure look: dark wood, gold, cream, carved capitals
+    const Font* font = original || !hd_ ? nullptr : hd_->adventure_font();
+    if (!font) return {};
+    PauseStyle st;
+    st.panel = {28, 19, 11, 255}, st.accent = {240, 196, 106, 255}, st.text = {250, 238, 215, 255}, st.muted = {196, 170, 128, 255};
+    st.key = {62, 42, 22, 255}, st.rule = {96, 68, 38, 255}, st.hover = {82, 58, 32, 255};
+    st.font = font;
+    return st;
+}
+
 std::string BallBreakerView::help() const {
     return std::string("O  Speed: ") + (original_speed_ ? "Original" : "Even") +
            "\nT  Theme: " + (hd_ ? hd_->theme_name() : "Neon / Tron") +
@@ -1025,7 +1078,7 @@ std::string BallBreakerView::help() const {
 
 std::string BallBreakerView::on_key(Spectrum&, int key) {
     if (key == KEY_T && hd_) {
-        hd_->set_theme(hd_->theme() == BBTheme::Neon ? BBTheme::ClassicHD : BBTheme::Neon);
+        hd_->set_theme(hd_->theme() == BBTheme::Neon ? BBTheme::ClassicHD : hd_->theme() == BBTheme::ClassicHD ? BBTheme::Studio : BBTheme::Neon);
         return std::string("THEME: ") + hd_->theme_name();
     }
     if (key == KEY_L) {
@@ -1048,7 +1101,10 @@ std::string BallBreakerView::on_key(Spectrum&, int key) {
         modern_previous_body_.reset(); even_pending_paddle_centre_.reset(); modern_pending_hit_.reset(); modern_event_clock_.reset(); even_paddle_clock_.reset(); even_previous_paddle_clock_.reset(); modern_last_ball_tick_=modern_last_contact_tick_=0; modern_episode_=false;
         preview_.clear();
         paddle_motion_.clear(); contact_motion_.clear();
-        return original_speed_ ? (preview_on() ? "SPEED: ORIGINAL / SMOOTH" : "SPEED: ORIGINAL") : "SPEED: EVEN";
+        // (a level the remake plays, or the game's own, is played out as it began: from the next one)
+        const bool later = engine_level_ || (mode_ == Mode::Play && !original_speed_ && engine_enabled_);
+        const char* when = later ? " (FROM THE NEXT SCREEN)" : "";
+        return std::string(original_speed_ ? (preview_on() ? "SPEED: ORIGINAL / SMOOTH" : "SPEED: ORIGINAL") : "SPEED: EVEN") + when;
     }
     return "";
 }
@@ -1057,11 +1113,17 @@ BBState BallBreakerView::read_state(const Spectrum& s) const {
     BBState st;
     st.paddle_hit = paddle_hit_;
     st.level = s.peek(LEVEL) % g_.levels;
+    st.levels = g_.levels;
     st.room = room_of(st.level);
     st.score = s.peek16(SCORE) * 100;
     st.missiles = s.peek(MISSILES);
     st.lives = s.peek(g_.lives);
     st.unlimited_lives = unlimited_lives_, st.unlimited_missiles = unlimited_missiles_;
+    if (engine_play()) {  // the remake's play: its objects, its counters
+        engine_.objects(st.objects);
+        st.score = engine_.score, st.missiles = engine_.missiles, st.lives = engine_.lives;
+        return st;
+    }
     uint16_t end = building_ ? OBJECTS : s.peek16(OBJECTS_END);
     int slot = 0;
     for (uint16_t a = OBJECTS; a + 10 <= end && slot < 200; a += 10, slot++) {
@@ -1314,7 +1376,7 @@ void BallBreakerView::smooth_sample(const Spectrum& s) {
         }
         if (moved) {
             Sample sample{sample_t, {v[0], v[1], v[2], v[3], v[4]}};
-            if (o.slot == 0 && hb_.contact && hybrid() && !tr.samples.empty() && sample_t > tr.samples.back().t) {
+            if (o.slot == 0 && hb_.contact && (hybrid() || engine_play()) && !tr.samples.empty() && sample_t > tr.samples.back().t) {
                 // the remake's ball bounced within this move: its touch, at its time, so the picture
                 // reaches the bat or the wall before it turns
                 const float x = hb_.contact_x, z = hb_.contact_z;
@@ -1565,7 +1627,128 @@ void BallBreakerView::jump_to(Spectrum& s, int level) {
     // goes into the game's level start, as after a cleared level: the room, its bricks, the
     // "SCREEN" intro; score, lives and missiles stay.
     pending_level_ = std::clamp(level, 0, g_.levels - 1);
+    if (engine_play()) {  // the game is parked: straight from there, with the remake's score and lives
+        s.poke16(SCORE, uint16_t(engine_.score / 100)), s.poke(g_.lives, uint8_t(engine_.lives));
+        s.poke(MISSILES, uint8_t(engine_.missiles));
+        s.poke(LEVEL, uint8_t(pending_level_)), pending_level_ = -1;
+        engine_level_ = false, engine_.stop();
+        engine_then_ = g_.level_start;
+        return;
+    }
     s.jump_at(g_.main_loop, g_.level_start, 0x0000);
+}
+
+void BallBreakerView::engine_start(Spectrum& s) {
+    // the level as the game has built it (each brick's cell, kind and sprite), the kinds' points and
+    // handlers, the bat's shape: the remake plays it
+    BBEngineRules rules;
+    for (size_t n = 0; n < 60; n++) {
+        rules.sprite[n] = s.peek(uint16_t(g_.brick_table - 1 + 3 * n));
+        rules.points[n] = s.peek(uint16_t(g_.brick_table + 3 * n));
+        rules.handler[n] = s.peek(uint16_t(g_.brick_table + 1 + 3 * n));
+    }
+    uint8_t mask[120];
+    const int sprite = std::clamp(int(s.peek(0xF3F8)), 0, 59);
+    for (int i = 0; i < 120; ++i) mask[i] = s.peek(uint16_t(g_.sprites + sprite * 120 + i));
+    bat_shape_ = bb_paddle_shape(mask);
+    const bool bb1 = g_.paddle_hit == 0x8a73;  // BB1's HD bat spans the room's corners (read_state)
+    const float bat_z = s.peek(BAT_Z);
+    auto left = [bb1](float centre, int width) {
+        const float native = centre - float(width / 2);
+        return bb1 ? bb_original_paddle_left(native, width) : native;
+    };
+    rules.bat_body = [this, bb1, bat_z, left](float centre, int width) {
+        return bb_visible_paddle_body(left(centre, width), float(width), bat_z, bb1 ? bb_even_paddle_inset(width) : 0, bat_shape_);
+    };
+    rules.bat_object = [bb1, bat_z, left](float centre, int width, BBObject& o) {
+        o.x = left(centre, width), o.y = 0, o.z = bat_z;
+        o.bat_width = float(width), o.bat_inset = bb1 ? float(bb_even_paddle_inset(width)) : 0;
+        o.sx = 160 + o.x - o.z, o.sy = 100 - o.x / 2;
+    };
+    engine_.set_rules(std::move(rules));
+    std::vector<BBEngineBrick> bricks;
+    for (uint16_t a = uint16_t(OBJECTS + 30), end = s.peek16(OBJECTS_END); a + 10 <= end; a = uint16_t(a + 10)) {
+        if (!s.peek(uint16_t(a + 1))) continue;
+        bricks.push_back({s.peek(uint16_t(a + 7)) / 12, s.peek(uint16_t(a + 9)) / 12 - 1, s.peek(uint16_t(a + 8)) / 12,
+                          s.peek(uint16_t(a + 6)), s.peek(uint16_t(a + 3)), (a - OBJECTS) / 10});
+    }
+    const int level = s.peek(LEVEL) % g_.levels;
+    if (level == 0 && s.peek16(SCORE) == 0) engine_fast_ = false;  // a new game
+    engine_.score = s.peek16(SCORE) * 100, engine_.lives = s.peek(g_.lives), engine_.missiles = s.peek(MISSILES);
+    engine_.start_level(bricks, level, engine_fast_);
+    engine_level_ = true;
+    drawn_score_ = drawn_missiles_ = drawn_lives_ = -1;
+}
+
+void BallBreakerView::engine_draw(Spectrum& s) {
+    // the original pictures: the remake's objects into the game's (sprite place, sprite, X Y Z), the
+    // changed ones on its redraw list (it erases each from where it was, [4] [5], and draws it anew),
+    // then its drawing is run from the park; the panel's numbers when they change
+    if (!g_.draw_dirty || !engine_calls_.empty()) return;  // (the last frame's not run yet)
+    std::vector<BBEngineDraw> draws;
+    engine_.draws(draws);
+    constexpr uint16_t LIST = 0x5C0D;  // the redraw list (0x8050 its end; room for 40 before 0x5C68)
+    uint16_t list = LIST;
+    for (const BBEngineDraw& d : draws) {
+        if (d.obj < 0 || list >= LIST + 80) continue;
+        const uint16_t a = uint16_t(OBJECTS + 10 * d.obj);
+        // below the playfield or off its side: not drawn (as the game hides a creature fallen off)
+        const bool off = d.sx < 1 || d.sx >= 0xFE || d.sy < 0 || d.sy >= 0x80;
+        const int sx = off ? 0 : d.sx, sy = off ? s.peek(uint16_t(a + 2)) : d.sy;
+        const bool changed = s.peek(uint16_t(a + 1)) != sx || s.peek(uint16_t(a + 2)) != sy || s.peek(uint16_t(a + 3)) != d.sprite;
+        if (!changed) continue;
+        const bool was_shown = s.peek(uint16_t(a + 1)) != 0 && s.peek(uint16_t(a + 2)) < 0x80;  // (0xF0: above the top)
+        if (!was_shown && sx == 0) {  // hidden, and hidden before: nothing to draw or erase
+            s.poke(uint16_t(a + 3), uint8_t(d.sprite));
+            continue;
+        }
+        // where it was (to erase); not shown before, its old place is its new (the game keeps such a
+        // place out of the playfield, e.g. the ball's 0xF0: no rectangle to erase there)
+        s.poke(uint16_t(a + 4), was_shown ? s.peek(uint16_t(a + 1)) : uint8_t(sx));
+        s.poke(uint16_t(a + 5), was_shown ? s.peek(uint16_t(a + 2)) : uint8_t(sy));
+        s.poke(uint16_t(a + 1), uint8_t(sx)), s.poke(uint16_t(a + 2), uint8_t(sy)), s.poke(uint16_t(a + 3), uint8_t(d.sprite));
+        s.poke(uint16_t(a + 7), uint8_t(std::clamp(d.x, 0, 255))), s.poke(uint16_t(a + 8), uint8_t(std::clamp(d.y, 0, 255)));
+        s.poke(uint16_t(a + 9), uint8_t(std::clamp(d.z, 0, 255)));
+        s.poke16(list, a), list = uint16_t(list + 2);
+    }
+    s.poke16(0x8050, list);
+    if (list != LIST) engine_calls_ = {g_.draw_dirty, g_.draw_blit};
+    if (engine_.score != drawn_score_) drawn_score_ = engine_.score, engine_calls_.push_back(g_.hud_score);
+    if (engine_.missiles != drawn_missiles_) drawn_missiles_ = engine_.missiles, engine_calls_.push_back(g_.hud_missiles);
+    if (engine_.lives != drawn_lives_) drawn_lives_ = engine_.lives, engine_calls_.push_back(g_.hud_lives);
+}
+
+void BallBreakerView::engine_frame(Spectrum& s) {
+    engine_.unlimited_lives = unlimited_lives_, engine_.unlimited_missiles = unlimited_missiles_;
+    engine_.speed_up = speed_up_;
+    BBEngineInput in;
+    in.dir = bat_dir_, in.target = bat_target_, in.fire = engine_fire_;
+    engine_.step(in);
+    for (const BBEngine::Event& e : engine_.take_events()) {
+        int sound = e.sound;  // the original's effect, played by its interrupt (its effects on)
+        if (e.kind == BBEngine::Event::Bat) {
+            paddle_hit_ = {++paddle_hit_id_, double(frame_ + 1) / Spectrum::FRAME_HZ, e.along};
+            sound = 4;
+        } else if (e.kind == BBEngine::Event::Wall) sound = 5;
+        if (sound && g_.sound_request && !s.peek(SOUND_FX)) s.poke(g_.sound_request, uint8_t(sound));
+    }
+    if (engine_.contact)  // a bounce between frames: the picture's track gets its point (see smooth_sample)
+        hb_.contact = true, hb_.contact_at = engine_.contact_at, hb_.contact_x = engine_.contact_x, hb_.contact_z = engine_.contact_z;
+    // the game's counters follow (its panel in the original pictures, the hi-scores at the end)
+    s.poke16(SCORE, uint16_t(engine_.score / 100)), s.poke(g_.lives, uint8_t(engine_.lives));
+    s.poke(MISSILES, uint8_t(engine_.missiles));
+    engine_draw(s);
+    if (engine_.result() == BBEngine::Result::Cleared) {  // the game builds the next (its card first)
+        const int next = (s.peek(LEVEL) + 1) % g_.levels;
+        if (next == 0) engine_fast_ = true;  // round again: the original's ball goes twice as fast
+        s.poke(LEVEL, uint8_t(next));
+        engine_level_ = false, engine_.stop();
+        engine_then_ = g_.level_start;
+    } else if (engine_.result() == BBEngine::Result::Over) {  // the game ends it: the hi-scores
+        s.poke(PLAY_REASON, 4);
+        engine_level_ = false, engine_.stop();
+        engine_then_ = g_.play_result;
+    }
 }
 
 void BallBreakerView::drop_in(BBState& st, double t) {
