@@ -58,7 +58,8 @@ cp "$OUT/app/libzxremakes.so" "$OUT/stage/lib/arm64-v8a/"
 cp "$OUT/dex/classes.dex" "$OUT/stage/"
 (cd "$OUT/stage" && zip -q -r "$OUT/base.apk" classes.dex lib)
 "$BT/zipalign" -P 16 -f 4 "$OUT/base.apk" "$OUT/aligned.apk"
-KS="$OUT/debug.keystore"
+KS="$HERE/keystore/zxremakes.keystore"  # (kept: an update installs over the last only with the same key)
+mkdir -p "$HERE/keystore"
 [ -f "$KS" ] || "$JDK/bin/keytool" -genkeypair -keystore "$KS" -storepass android -keypass android -alias zx \
   -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=ZX Remakes debug" >/dev/null 2>&1
 "$BT/apksigner" sign --ks "$KS" --ks-pass pass:android --ks-key-alias zx --out "$OUT/ZXRemakes.apk" "$OUT/aligned.apk"
