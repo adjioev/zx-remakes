@@ -358,6 +358,29 @@ void cylinder(V3 a, V3 b, float r, Color col, bool along_x, int seg = 20) {
     }
 }
 
+// a small sphere (true geometry: at a brick's size its egg shape does not show)
+void sphere(V3 c, float r, Color col, int seg = 12) {
+    auto p = [&](int a, int b) {
+        const float th = PI * float(a) / float(seg), ph = 2 * PI * float(b) / float(seg * 2);
+        return V3{std::sin(th) * std::cos(ph), std::cos(th), std::sin(th) * std::sin(ph)};
+    };
+    for (int i = 0; i < seg; i++)
+        for (int j = 0; j < seg * 2; j++) {
+            const V3 n0 = p(i, j), n1 = p(i + 1, j), n2 = p(i + 1, j + 1), n3 = p(i, j + 1);
+            vtx(c + n0 * r, n0, col), vtx(c + n1 * r, n1, col), vtx(c + n2 * r, n2, col);
+            vtx(c + n0 * r, n0, col), vtx(c + n2 * r, n2, col), vtx(c + n3 * r, n3, col);
+        }
+}
+
+// faces of a solid around centre m: their normals turned outwards whatever the order of the corners
+void out_tri(V3 m, V3 a, V3 b, V3 c, Color col) {
+    V3 n = face_n(a, b, c);
+    const V3 f = (a + b + c) * (1.0f / 3) - m;
+    if (n.x * f.x + n.y * f.y + n.z * f.z < 0) n = n * -1;
+    tri(a, b, c, n, col);
+}
+void out_quad(V3 m, V3 a, V3 b, V3 c, V3 d, Color col) { out_tri(m, a, b, c, col), out_tri(m, a, c, d, col); }
+
 Color shade(Color c, float k) {
     return {uint8_t(std::min(255.f, c.r * k)), uint8_t(std::min(255.f, c.g * k)), uint8_t(std::min(255.f, c.b * k)), c.a};
 }
@@ -448,6 +471,10 @@ void BBStudio::set_world(BBWorld w) {
         tried_[i] = true;
         const std::string d = dir_ + "/" + bb_world_style(w).dir;
         if ((rooms_[i] = bb_load_art(d + "/room")).id) SetTextureFilter(rooms_[i], TEXTURE_FILTER_BILINEAR);
+        if ((creatures_[i] = bb_load_art(d + "/creatures")).id) {
+            GenTextureMipmaps(&creatures_[i]);
+            SetTextureFilter(creatures_[i], TEXTURE_FILTER_TRILINEAR);
+        }
         if ((bricks_[i] = bb_load_art(d + "/bricks")).id) {
             GenTextureMipmaps(&bricks_[i]);
             SetTextureFilter(bricks_[i], TEXTURE_FILTER_TRILINEAR);
@@ -463,6 +490,7 @@ BBStudio::~BBStudio() {
     for (int i = 0; i < BB_WORLDS; i++) {
         if (rooms_[i].id) UnloadTexture(rooms_[i]);
         if (bricks_[i].id) UnloadTexture(bricks_[i]);
+        if (creatures_[i].id) UnloadTexture(creatures_[i]);
     }
     if (engrave_.id) UnloadTexture(engrave_);
 }
@@ -644,24 +672,122 @@ void BBStudio::things(const BBState& s, const LookFn& look, const BatFn& bat_bod
         const Look lk = look(o.sprite);
         const float x0 = o.x, x1 = o.x + CUBE, y0 = o.y, y1 = o.y + CUBE, z0 = o.z - CUBE, z1 = o.z;
         material(0, stone_.id ? (room_.id ? bb_world_style(world_).brick_gloss : 0.4f) : 0.65f, 0, 0, 1);
+        const Color c = lk.colour;
+        const float xm = (x0 + x1) / 2, ym = (y0 + y1) / 2, zm = (z0 + z1) / 2;
+        const V3 mid{xm, ym, zm};
+        auto steel = [&] { material(0.6f, 0.6f); };
+        const Color iron{150, 160, 175, 255};
         switch (lk.shape) {
-        case 1: pyramid(x0, x1, y0, y1, z0, z1, lk.colour); break;
-        case 4: diamond(x0, x1, y0, y1, z0, z1, lk.colour); break;
+        case 1: pyramid(x0, x1, y0, y1, z0, z1, c); break;
+        case 4: diamond(x0, x1, y0, y1, z0, z1, c); break;
         case 2: {
             const float lift = std::max(0.0f, o.lift >= 0 ? o.lift : slab(o.sprite));
-            box(x0, x1, y0, y0 + 4, z0, z1, lk.colour, 0.8f);
-            box(x0, x1, y0 + 4 + lift, y0 + 8 + lift, z0, z1, lk.colour, 0.8f);
+            box(x0, x1, y0, y0 + 4, z0, z1, c, 0.8f);
+            box(x0, x1, y0 + 4 + lift, y0 + 8 + lift, z0, z1, c, 0.8f);
             break;
         }
-        case 3:
-            material(0.15f, 0.8f);
-            cylinder({x0, y0 + 6, (z0 + z1) / 2}, {x1, y0 + 6, (z0 + z1) / 2}, 5.5f, lk.colour, true);
+        case 3:  // a tube along X (bricks side by side make one)
+            cylinder({x0, y0 + 6, zm}, {x1, y0 + 6, zm}, 5.5f, c, true);
             break;
-        case 5:
-            material(0.15f, 0.7f);
-            cylinder({x0 + 6, y0, (z0 + z1) / 2}, {x0 + 6, y0 + 10, (z0 + z1) / 2}, 5.5f, lk.colour, false);
+        case 5: {  // the bomb: a barrel standing, its fuse burning on top
+            cylinder({xm, y0, zm}, {xm, y1 - 1, zm}, 5.0f, c, false);
+            steel();
+            for (float y : {y0 + 2.0f, y1 - 3.0f}) cylinder({xm, y, zm}, {xm, y + 1, zm}, 5.25f, iron, false);  // its hoops
+            cylinder({xm, y1 - 1, zm}, {xm, y1 + 1.5f, zm}, 0.6f, Color{60, 50, 40, 255}, false);
+            if (!shadows) {
+                material(0, 0.2f, 2.5f + 1.5f * float(std::sin(t_ * 14.0)));
+                sphere({xm, y1 + 1.9f, zm}, 0.9f, Color{255, 170, 60, 255}, 8);
+            }
             break;
-        default: box(x0, x1, y0, y1, z0, z1, lk.colour); break;
+        }
+        case 6: {  // a "П" lying flat: the bar at the back, the legs along the floor towards the bat
+            const float bar = 5, leg = 4;
+            box(x0, x1, y0, y1, z1 - bar, z1, c);
+            box(x1 - leg, x1, y0, y1, z0, z1 - bar + 0.5f, c);
+            box(x0, x0 + leg, y0, y1, z0, z1 - bar + 0.5f, c);
+            break;
+        }
+        case 7: {  // a "U" open towards the bat and up, the wall at its back breathing (0x35: none)
+            static const float FILL[5] = {0, 0.25f, 1, 0.5f, 0.75f};
+            const float th = 3, fill = FILL[std::clamp(o.sprite - 0x35, 0, 4)];
+            box(x0 + th - 0.3f, x1 - th + 0.3f, y0, y0 + th, z0, z1, c, 0.6f);
+            if (fill > 0) box(x0 + th, x1 - th, y0 + th, y0 + th + (y1 - y0 - th) * fill, z1 - th, z1, c, 0.6f);
+            box(x1 - th, x1, y0, y1, z0, z1, c, 0.8f);
+            box(x0, x0 + th, y0, y1, z0, z1, c, 0.8f);
+            break;
+        }
+        case 8: {  // a triangular bar along X
+            const V3 a{x0, y0, z0}, b{x1, y0, z0}, cc{x1, y0, z1}, d{x0, y0, z1}, e{x0, y1, zm}, f{x1, y1, zm};
+            out_quad(mid, a, b, f, e, c), out_quad(mid, d, e, f, cc, c), out_quad(mid, a, d, cc, b, c);
+            out_tri(mid, a, e, d, c), out_tri(mid, b, cc, f, c);
+            break;
+        }
+        case 9: {  // a ramp rising towards the back
+            const V3 a{x0, y0, z0}, b{x1, y0, z0}, cc{x1, y0, z1}, d{x0, y0, z1}, e{x1, y1, z0}, f{x1, y1, z1};
+            const V3 m{xm + 2, ym - 2, zm};
+            out_quad(m, a, d, f, e, c), out_quad(m, b, e, f, cc, c), out_quad(m, a, b, cc, d, c);
+            out_tri(m, a, e, b, c), out_tri(m, d, cc, f, c);
+            break;
+        }
+        case 10: {  // armoured: steel straps round it; the one only a bomb breaks carries a bomb
+            box(x0, x1, y0, y1, z0, z1, c);
+            steel();
+            for (float z : {z0 + 0.8f, z1 - 2.5f}) box(x0 - 0.3f, x1 + 0.3f, y0 + 0.6f, y1 + 0.3f, z, z + 1.7f, iron, 0.3f);
+            for (float x : {x0 + 0.8f, x1 - 2.5f}) box(x, x + 1.7f, y0 + 0.6f, y1 + 0.3f, z0 - 0.3f, z1 + 0.3f, iron, 0.3f);
+            if (o.sprite == 0x09) {
+                material(0.3f, 0.7f);
+                sphere({xm, y1 + 2.2f, zm}, 2.4f, Color{40, 40, 46, 255});
+                cylinder({xm + 1.2f, y1 + 3.8f, zm}, {xm + 1.2f, y1 + 5.2f, zm}, 0.4f, Color{90, 70, 50, 255}, false);
+            }
+            break;
+        }
+        case 11: {  // a frame raised on its faces (gilt)
+            box(x0, x1, y0, y1, z0, z1, c);
+            material(0.7f, 0.7f);
+            const Color g = shade(c, 0.85f);
+            const float m = 2.2f, w = 1.2f, out = 0.35f;
+            // on the front (X = x0), the side (Z = z0) and the top (Y = y1)
+            box(x0 - out, x0 + 0.1f, y0 + m, y0 + m + w, z0 + m, z1 - m, g, 0.2f);
+            box(x0 - out, x0 + 0.1f, y1 - m - w, y1 - m, z0 + m, z1 - m, g, 0.2f);
+            box(x0 - out, x0 + 0.1f, y0 + m, y1 - m, z0 + m, z0 + m + w, g, 0.2f);
+            box(x0 - out, x0 + 0.1f, y0 + m, y1 - m, z1 - m - w, z1 - m, g, 0.2f);
+            box(x0 + m, x1 - m, y0 + m, y0 + m + w, z0 - out, z0 + 0.1f, g, 0.2f);
+            box(x0 + m, x1 - m, y1 - m - w, y1 - m, z0 - out, z0 + 0.1f, g, 0.2f);
+            box(x0 + m, x0 + m + w, y0 + m, y1 - m, z0 - out, z0 + 0.1f, g, 0.2f);
+            box(x1 - m - w, x1 - m, y0 + m, y1 - m, z0 - out, z0 + 0.1f, g, 0.2f);
+            box(x0 + m, x1 - m, y1 - 0.1f, y1 + out, z0 + m, z0 + m + w, g, 0.2f);
+            box(x0 + m, x1 - m, y1 - 0.1f, y1 + out, z1 - m - w, z1 - m, g, 0.2f);
+            box(x0 + m, x0 + m + w, y1 - 0.1f, y1 + out, z0 + m, z1 - m, g, 0.2f);
+            box(x1 - m - w, x1 - m, y1 - 0.1f, y1 + out, z0 + m, z1 - m, g, 0.2f);
+            break;
+        }
+        case 12: {  // the bat's size: a cage of bars, a light inside
+            steel();
+            const float b = 1.3f;
+            for (float y : {y0, y1 - b})
+                for (float z : {z0, z1 - b}) box(x0, x1, y, y + b, z, z + b, iron, 0.3f);
+            for (float x : {x0, x1 - b})
+                for (float z : {z0, z1 - b}) box(x, x + b, y0, y1, z, z + b, iron, 0.3f);
+            for (float x : {x0, x1 - b})
+                for (float y : {y0, y1 - b}) box(x, x + b, y, y + b, z0, z1, iron, 0.3f);
+            if (!shadows) material(0, 0.4f, 1.2f + 0.4f * float(std::sin(t_ * 3.0)));
+            box(xm - 3, xm + 3, ym - 3, ym + 3, zm - 3, zm + 3, c, 0.8f);
+            break;
+        }
+        case 13: {  // a bonus life: the block, a glowing "+" on its faces
+            box(x0, x1, y0, y1, z0, z1, c);
+            if (shadows) break;
+            material(0, 0.4f, 1.0f);
+            const Color plus{200, 255, 215, 255};
+            box(x0 - 0.3f, x0 + 0.1f, ym - 0.7f, ym + 0.7f, zm - 3, zm + 3, plus, 0.2f);
+            box(x0 - 0.3f, x0 + 0.1f, ym - 3, ym + 3, zm - 0.7f, zm + 0.7f, plus, 0.2f);
+            box(xm - 3, xm + 3, ym - 0.7f, ym + 0.7f, z0 - 0.3f, z0 + 0.1f, plus, 0.2f);
+            box(xm - 0.7f, xm + 0.7f, ym - 3, ym + 3, z0 - 0.3f, z0 + 0.1f, plus, 0.2f);
+            box(xm - 3, xm + 3, y1 - 0.1f, y1 + 0.3f, zm - 0.7f, zm + 0.7f, plus, 0.2f);
+            box(xm - 0.7f, xm + 0.7f, y1 - 0.1f, y1 + 0.3f, zm - 3, zm + 3, plus, 0.2f);
+            break;
+        }
+        default: box(x0, x1, y0, y1, z0, z1, c); break;
         }
     }
 }

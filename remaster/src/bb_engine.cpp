@@ -21,6 +21,10 @@ constexpr float MISSILE_V = 3;      // a missile: Z a frame (0x9BE6), from Z 12
 constexpr int MISSILE_WALL = 156;   // it bursts at the far wall
 constexpr int COOLDOWN_BURST = 12, COOLDOWN_CREATURE = 2;
 constexpr int MAX_CREATURES = 8;
+// (the remake's: one that walks off the front comes back alone, after a while, with at most a few
+// about; the original sends one, or two by chance, at once, and they crowd the floor)
+constexpr int RESPAWN_WAIT = 200;   // 4 s
+constexpr int MAX_ABOUT = 3;
 constexpr int HOLD_UNDER = 14;      // a stack a creature walks out from under falls this much later
 constexpr int EXIT_WAIT = 120;      // the exit brick: from the clear floor to the next level
 constexpr int CLEARED_WAIT = 50;    // all done: the last explosions and their shards, then the next level
@@ -45,7 +49,7 @@ void partner(int kind, int& col, int& row) {  // a long brick's other half
 BBPaddleBody BBEngine::bat_body() const { return rules_.bat_body(bat_x_, bat_width_); }
 
 void BBEngine::start_level(const std::vector<BBEngineBrick>& bricks, int level, bool fast) {
-    bricks_.clear(), creatures_.clear(), holds_.clear();
+    bricks_.clear(), creatures_.clear(), holds_.clear(), returning_.clear();
     for (const BBEngineBrick& b : bricks) {
         if (creature_kind(b.kind) && b.layer == 0) {  // a creature on the floor: it walks
             Creature c;
@@ -562,13 +566,23 @@ void BBEngine::step_creatures() {
                 continue;
             }
         }
-        if (c.y < -60) {  // gone below the playfield: one comes back at its home (and a second, by chance)
-            const Creature gone = c;
+        if (c.y < -60) {  // gone below the playfield: one comes back at its home, later
+            returning_.push_back({c, RESPAWN_WAIT});
             release(c);
             creatures_.erase(creatures_.begin() + long(n)), n--;
-            respawn(gone);
-            if (random() & 1) respawn(gone);
         }
+    }
+    if (!play || eating_ > 0) return;
+    for (size_t n = 0; n < returning_.size(); n++) {
+        if (--returning_[n].wait > 0) continue;
+        int about = int(creatures_.size());
+        for (const Brick& b : bricks_) about += b.state != State::Gone && creature_kind(b.kind);
+        if (about >= MAX_ABOUT) {  // a crowd already: try again in a second
+            returning_[n].wait = 50;
+            continue;
+        }
+        respawn(returning_[n].who);
+        returning_.erase(returning_.begin() + long(n)), n--;
     }
 }
 

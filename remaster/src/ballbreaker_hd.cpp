@@ -69,6 +69,14 @@ BBStudio::Look studio_look(int sprite) {
     case Shape::Lying: shape = 3; break;
     case Shape::Diamond: shape = 4; break;
     case Shape::Barrel: shape = 5; break;
+    case Shape::Gate: shape = 6; break;
+    case Shape::Spinner: shape = 7; break;
+    case Shape::Prism: shape = 8; break;
+    case Shape::Ramp: shape = 9; break;
+    case Shape::Armored: shape = 10; break;
+    case Shape::Framed: shape = 11; break;
+    case Shape::Wire: shape = 12; break;
+    case Shape::LifeBall: shape = 13; break;
     default: break;
     }
     return BBStudio::Look{k.colour, shape};
@@ -1951,12 +1959,46 @@ bool BBRenderer::studio_draw(const BBState& s, double t) {
     EndBlendMode();
     for (const BBObject& o : shown.objects) {
         if (o.slot == 2 || (o.sprite >= 0x16 && o.sprite <= 0x18)) missile(o, t, false);
-        else if (o.slot >= 3 && o.sprite >= 0x11 && o.sprite <= 0x15) sprite(o, Color{140, 255, 180, 255}, t, false);
+        else if (o.slot >= 3 && o.sprite >= 0x11 && o.sprite <= 0x15) {
+            if (!adventure_creature(o, t)) sprite(o, Color{140, 255, 180, 255}, t, false);
+        } else if (o.slot >= 3 && o.sprite >= 0x19 && o.sprite <= 0x1F && studio_->room()) {
+            // coming or going (the explosion's frames, forwards or back): a flash in the world's light
+            const float k = 1 - float(o.sprite - 0x19) / 7, cx = (o.sx + 12) * SCALE, cy = (o.sy + 10) * SCALE;
+            const Color c = bb_world_style(studio_->world()).glow_in;
+            BeginBlendMode(BLEND_ADDITIVE);
+            DrawCircleGradient(Vector2{cx, cy}, 40 + 90 * k, Color{c.r, c.g, c.b, uint8_t(160 * k)}, Color{c.r, c.g, c.b, 0});
+            EndBlendMode();
+        }
     }
     effects(t, false);
     EndMode2D();
     if (s.menu.screen == Sc::LevelCard) level_card(s, t, false);
     temple_panel(s, t);
+    return true;
+}
+
+bool BBRenderer::adventure_creature(const BBObject& o, double t) {
+    // the world's own creature: the walker's four steps (as the game turns them), the other's two
+    // frames turn by time; a bob on its step or a float, a shadow under it
+    const Texture2D* tex = studio_ ? studio_->creatures() : nullptr;
+    if (!tex) return false;
+    const float cw = float(tex->width) / 6, ch = float(tex->height), S = SCALE;
+    const bool walker = o.sprite <= 0x14;
+    const float phase = float(o.x * 0.37f + o.z * 0.21f);
+    float lift = walker ? std::fabs(float(std::sin(t * 11 + phase))) * 0.5f : 1.2f + float(std::sin(t * 3 + phase)) * 1.0f;
+    const Rectangle dst{(o.sx - 3) * S, (o.sy - 3 - lift) * S, 30 * S, 26 * S};
+    const float floor_y = (o.sy + 20) * S;
+    DrawEllipse(int(dst.x + dst.width / 2), int(floor_y - 4), dst.width * (walker ? 0.3f : 0.22f), 14, Color{0, 0, 0, uint8_t(walker ? 90 : 60)});
+    auto cell = [&](int i, float a) {
+        DrawTexturePro(*tex, {cw * float(i), 0, cw, ch}, dst, {0, 0}, 0, Fade(WHITE, a));
+    };
+    if (walker) cell(o.sprite - 0x11, 1);
+    else {  // two frames, a short blend at each turn
+        const float u = float(std::fmod(t * 2.2 + phase, 2.0)), f = u < 1 ? 0.0f : 1.0f, w = std::fmod(u, 1.0f);
+        const float blend = std::clamp((w - 0.85f) / 0.15f, 0.0f, 1.0f);
+        cell(4 + int(f), 1);
+        if (blend > 0) cell(4 + (1 - int(f)), blend);
+    }
     return true;
 }
 

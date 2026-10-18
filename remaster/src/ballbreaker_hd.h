@@ -147,6 +147,7 @@ private:
     void sunlight(double t);
     void ambient(double t);  // the Adventure world's own life: sun, water, snow, embers
     BBWorld world_of(const BBState& s) const;
+    bool adventure_creature(const BBObject& o, double t);  // false: none for this world
     void effects(double t, bool glow_pass);
     // the menus (end of ballbreaker_hd.cpp)
     void menu_scene(const BBState&, double t, bool glow_pass);

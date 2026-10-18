@@ -148,6 +148,11 @@ private:
     BBEngineRules rules_;
     std::vector<Brick> bricks_;
     std::vector<Creature> creatures_;
+    struct Returning {
+        Creature who;
+        int wait;  // frames until it comes back
+    };
+    std::vector<Returning> returning_;
     std::vector<Hold> holds_;
     Ball ball_;
     Missile missile_;

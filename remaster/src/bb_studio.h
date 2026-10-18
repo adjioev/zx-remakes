@@ -33,7 +33,10 @@ class BBStudio {
 public:
     struct Look {
         Color colour;
-        int shape;  // 0 box, 1 pyramid, 2 slabs, 3 lying cylinder, 4 diamond, 5 barrel
+        // 0 box, 1 pyramid, 2 slabs, 3 lying cylinder, 4 diamond, 5 barrel (the bomb), 6 a lying "П",
+        // 7 a "U" with a breathing wall, 8 a prism, 9 a ramp, 10 armoured, 11 framed, 12 the bat-size cage,
+        // 13 a bonus life
+        int shape;
     };
     explicit BBStudio(const std::string& dir);  // dir: the art (engrave.png, a folder per world)
     void set_world(BBWorld w);
@@ -63,12 +66,14 @@ public:
     static Vector3 ball_at(const BBObject& o);
     // the room painted (walls, floor, what is round it; drawn first, flat), if there is the art
     const Texture2D* room() const { return room_.id ? &room_ : nullptr; }
+    // the world's creatures: six cells (four steps of the walker, two frames of the other), if there
+    const Texture2D* creatures() const { return creatures_[int(world_)].id ? &creatures_[int(world_)] : nullptr; }
 
 private:
     Shader shader_{};
     std::string dir_;
     BBWorld world_ = BBWorld::Jungle;
-    Texture2D rooms_[BB_WORLDS]{}, bricks_[BB_WORLDS]{};
+    Texture2D rooms_[BB_WORLDS]{}, bricks_[BB_WORLDS]{}, creatures_[BB_WORLDS]{};
     bool tried_[BB_WORLDS]{};
     Texture2D room_{}, stone_{}, engrave_{};  // (room_, stone_: the world's, owned by the arrays)
     int loc_moss_ = -1, loc_fire_ = -1, loc_air_ = -1, loc_crack_ = -1, loc_caustics_ = -1, loc_time_ = -1;
